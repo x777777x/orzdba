@@ -14,14 +14,17 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"orzdba/internal/metric"
 )
 
-// tcprstatBin is hardcoded (plan §9.5: no PATH lookup, prevents PATH injection).
-const tcprstatBin = "/usr/bin/tcprstat"
+// tcprstatBin is the subprocess path. It's a var (not const) so tests can
+// point it at a fake script and exercise Start/Stop without the real binary
+// (plan §9.5: no PATH lookup, prevents PATH injection).
+var tcprstatBin = "/usr/bin/tcprstat"
 
 // Collector runs one tcprstat subprocess and reports count/avg/avg_95/avg_99
 // per tick. It implements render.Collector in the mysql group (green '|').
@@ -30,7 +33,8 @@ type Collector struct {
 	cmd              *exec.Cmd
 	logPath, lckPath string
 	started          bool
-	restarts         int // crash-restart budget (§9.5: abandon after 1 retry)
+	restarts         int         // crash-restart budget (§9.5: abandon after 1 retry)
+	exited           atomic.Bool // set by the Wait goroutine when the child dies
 }
 
 // New returns an RT collector for the given MySQL port and listen IP.
@@ -79,6 +83,13 @@ func (c *Collector) Start() error {
 		_ = os.Remove(c.lckPath)
 		return fmt.Errorf("tcprstat start failed: %w", err)
 	}
+	// The child dup'd the fd; the parent's handle can be closed (avoids an
+	// fd leak for the process lifetime). Reaps the child on exit and sets the
+	// exited flag so Collect detects a crash (a zombie would still answer
+	// signal 0, masking the crash — plan §9.5 crash detection).
+	logFile.Close()
+	c.exited.Store(false)
+	go func() { _ = c.cmd.Wait(); c.exited.Store(true) }()
 	c.started = true
 	return nil
 }
@@ -89,8 +100,7 @@ func (c *Collector) Collect() []metric.Cell {
 	if !c.started || c.cmd == nil || c.cmd.Process == nil {
 		return zeroRT()
 	}
-	// Liveness probe via signal 0.
-	if err := c.cmd.Process.Signal(syscall.Signal(0)); err != nil {
+	if c.exited.Load() {
 		if c.restarts == 0 {
 			c.restarts++
 			_ = c.restart()
@@ -120,7 +130,14 @@ func (c *Collector) restart() error {
 	c.cmd = exec.Command(tcprstatBin, "--no-header", "-t", "1", "-n", "0", "-p", c.port, "-l", c.ip)
 	c.cmd.Stdout = logFile
 	c.cmd.Stderr = nil
-	return c.cmd.Start()
+	if err := c.cmd.Start(); err != nil {
+		logFile.Close()
+		return err
+	}
+	logFile.Close()
+	c.exited.Store(false)
+	go func() { _ = c.cmd.Wait(); c.exited.Store(true) }()
+	return nil
 }
 
 // lastSample reads the log file's last non-empty line and parses it.
@@ -142,18 +159,23 @@ func (c *Collector) lastSample() (count, avg, avg95, avg99 int64, ok bool) {
 }
 
 // Stop terminates the subprocess and removes log/lock files. Idempotent.
+// The Start/restart Wait goroutine reaps the child, so we signal and poll the
+// exited flag rather than calling Wait again (a second Wait would error).
 func (c *Collector) Stop() {
-	if c.cmd != nil && c.cmd.Process != nil {
+	if c.cmd != nil && c.cmd.Process != nil && !c.exited.Load() {
 		_ = c.cmd.Process.Signal(syscall.SIGTERM)
 		// Wait up to 200ms for graceful exit, then SIGKILL (§9.5).
-		done := make(chan error, 1)
-		go func() { done <- c.cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(200 * time.Millisecond):
-			_ = c.cmd.Process.Signal(syscall.SIGKILL)
-			<-done
+		deadline := time.Now().Add(200 * time.Millisecond)
+		for time.Now().Before(deadline) && !c.exited.Load() {
+			time.Sleep(5 * time.Millisecond)
 		}
+		if !c.exited.Load() {
+			_ = c.cmd.Process.Signal(syscall.SIGKILL)
+		}
+	}
+	// Let the Wait goroutine finish reaping (esp. after SIGKILL).
+	for i := 0; i < 40 && !c.exited.Load(); i++ {
+		time.Sleep(5 * time.Millisecond)
 	}
 	_ = os.Remove(c.logPath)
 	_ = os.Remove(c.lckPath)

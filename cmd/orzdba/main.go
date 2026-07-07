@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -262,8 +263,9 @@ func mysqlTitleLine(status *mycol.StatusSource, color bool) string {
 }
 
 // varGroup1/varGroup2 are the two SHOW VARIABLES groups the Perl print_title
-// displays (appendix B). Order follows the Perl source; MySQL returns rows
-// sorted by name, so the displayed order is alphabetical (plan §15 allows this).
+// displays (appendix B). We print them in this hardcoded list order (a fixed,
+// logical grouping), which differs from the Perl original's MySQL-sorted-by-
+// name order — plan §15 explicitly allows this ordering difference.
 var varGroup1 = []string{
 	"sync_binlog", "max_connections", "max_user_connections", "max_connect_errors",
 	"table_open_cache", "table_definition_cache", "thread_cache_size", "binlog_format",
@@ -350,7 +352,8 @@ func (*timeCol) Collect() []metric.Cell {
 }
 
 // detectCPU returns the logical CPU count from /proc/cpuinfo, falling back to
-// runtime.NumCPU() when /proc is unavailable (non-Linux dev hosts).
+// runtime.NumCPU() when /proc is unavailable (non-Linux dev hosts). The
+// fallback is dev-only; production runs on Linux with /proc.
 func detectCPU() int {
 	data, err := os.ReadFile("/proc/cpuinfo")
 	if err == nil {
@@ -358,8 +361,7 @@ func detectCPU() int {
 			return n
 		}
 	}
-	// runtime fallback (dev only; production is Linux with /proc).
-	return 1
+	return runtime.NumCPU()
 }
 
 // validateDevFlag rejects device-name values that look like a flag (start with
@@ -385,13 +387,22 @@ func checkDiskDevice(dev string) error {
 	if err != nil {
 		return nil // /proc absent (non-Linux) — skip check, degrade at runtime
 	}
+	if !findDiskDevice(data, dev) {
+		return fmt.Errorf("disk device %q not found in /proc/diskstats", dev)
+	}
+	return nil
+}
+
+// findDiskDevice reports whether dev appears as a device name (field[2]) in
+// /proc/diskstats content. Pure so it can be tested with a sample.
+func findDiskDevice(data []byte, dev string) bool {
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 3 && f[2] == dev {
-			return nil
+			return true
 		}
 	}
-	return fmt.Errorf("disk device %q not found in /proc/diskstats", dev)
+	return false
 }
 
 // usage prints the custom help (plan §2.4 P2-23: orzdba-go had none). The text

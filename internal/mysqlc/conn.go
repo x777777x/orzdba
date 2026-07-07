@@ -116,8 +116,11 @@ func ResolveCredentials(o ResolveOpts) Config {
 	return c
 }
 
-// loadCNF parses an explicit file, else searches DefaultCNFSearch for the
-// first existing file and parses that. Returns nil if none parse.
+// loadCNF parses an explicit file, else searches DefaultCNFSearch and MERGES
+// every existing file cumulatively (last-wins per field, matching the mysql
+// client — which reads /etc/my.cnf, /etc/mysql/my.cnf, and ~/.my.cnf together,
+// not just the first). Returning only the first existing file silently dropped
+// ~/.my.cnf credentials when /etc/my.cnf existed but lacked a [client] group.
 func loadCNF(explicit, group string) *CNFSource {
 	if explicit != "" {
 		src, err := ParseMySQLDefaults(explicit, group)
@@ -130,6 +133,8 @@ func loadCNF(explicit, group string) *CNFSource {
 		}
 		return src
 	}
+	merged := &CNFSource{}
+	any := false
 	for _, p := range DefaultCNFSearch {
 		if p == "" {
 			continue
@@ -144,9 +149,31 @@ func loadCNF(explicit, group string) *CNFSource {
 		if w := CheckFileMode(p); w != "" {
 			fmt.Fprintln(os.Stderr, w)
 		}
-		return src
+		if !src.Found {
+			continue // this file has no [group] section with credential keys
+		}
+		any = true
+		if src.User != "" {
+			merged.User = src.User
+		}
+		if src.Password != "" {
+			merged.Password = src.Password
+		}
+		if src.Host != "" {
+			merged.Host = src.Host
+		}
+		if src.Port != 0 {
+			merged.Port = src.Port
+		}
+		if src.Socket != "" {
+			merged.Socket = src.Socket
+		}
 	}
-	return nil
+	if !any {
+		return nil
+	}
+	merged.Found = true
+	return merged
 }
 
 // DSN returns the go-sql-driver/mysql DSN. Socket takes precedence over
