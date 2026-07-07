@@ -1,0 +1,8 @@
+nr_free_pages 123456
+nr_inactive_anon 100
+nr_active_anon 200
+pswpin 75
+pswpout 42
+pgpgin 1000
+pgpgout 2000
+pgfault 5000

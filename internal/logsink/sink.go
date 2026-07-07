@@ -1,0 +1,53 @@
+// Package logsink implements output sinks: stdout, single file, and
+// daily-rotated file.
+//
+// File mode is forced to 0600 (with os.Chmod fallback) — no world-writable
+// logs (plan §9.6, fixing orzdba-go P0-4). Data log writes go directly to
+// file.Write, not through the log package (plan §9.6, avoiding orzdba-go
+// P0-6's `log.New` flag misuse). Handles are held for the process lifetime,
+// not reopened per tick (plan §5.6).
+package logsink
+
+import (
+	"io"
+	"os"
+	"time"
+)
+
+// Sink is the output target. Write is the data path (no `log` package).
+type Sink interface {
+	io.Writer
+	Close() error
+}
+
+// RotateSink is implemented by sinks that rotate on a day boundary. On
+// rotation the caller reprints the title block and resets its row counter
+// (plan §7.13: `count -= mycount; mycount = 0`).
+type RotateSink interface {
+	Sink
+	// MaybeRotate rotates to a new day if `now` crossed midnight. Returns true
+	// when a rotation happened.
+	MaybeRotate(now time.Time) bool
+}
+
+// New returns the appropriate sink: stdout when no logfile, a single File
+// otherwise, or a DailyFile when -logfile_by_day is set.
+func New(logfile string, byDay bool) (Sink, error) {
+	if logfile == "" {
+		return &Stdout{}, nil
+	}
+	if byDay {
+		return newDailyFile(logfile)
+	}
+	return newFile(logfile)
+}
+
+// openFile opens (truncating) a 0600 log file + Chmod fallback.
+func openFile(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(path, 0o600)
+	return f, nil
+}

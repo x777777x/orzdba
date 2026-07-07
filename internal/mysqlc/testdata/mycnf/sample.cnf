@@ -1,0 +1,16 @@
+# sample my.cnf for tests (fake credentials only)
+[client]
+host = 127.0.0.1
+port = 3306
+user = "root"
+password = "p@ss word"
+socket = /tmp/mysql.sock
+
+; semicolon comment
+[mysqld]
+datadir = /var/lib/mysql
+skip-networking
+
+[mysql]
+user=root
+password=fakepass

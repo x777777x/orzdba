@@ -1,0 +1,14 @@
+processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 142
+model name	: Intel(R) Core(TM) i7
+stepping	: 9
+cpu MHz		: 2000.000
+cache size	: 256 KB
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 142
+model name	: Intel(R) Core(TM) i7
+cpu MHz		: 2000.000
