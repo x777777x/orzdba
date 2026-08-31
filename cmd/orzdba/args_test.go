@@ -70,7 +70,7 @@ func TestExpandSys(t *testing.T) {
 		name string
 		got  bool
 	}{
-		{"time", c.time}, {"load", c.load}, {"cpu", c.cpu}, {"swap", c.swap},
+		{"time", c.time}, {"load", c.load}, {"cpu", c.cpu}, {"swap", c.swap}, {"mem", c.mem},
 	} {
 		if !b.got {
 			t.Errorf("%s not set by -sys", b.name)

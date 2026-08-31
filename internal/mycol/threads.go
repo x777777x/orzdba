@@ -31,7 +31,7 @@ func (t *Threads) Collect() []metric.Cell {
 	cac := t.src.Cur("Threads_cached")
 	hit := threadCacheHit(t.src)
 	return []metric.Cell{
-		{Text: fmt.Sprintf("%4d %4d %4d %4d %6.2f", run, con, cre, cac, hit), Color: tchitColor(hit)},
+		{Text: fmt.Sprintf("%4d %4d %4d %4d %6.2f", run, con, cre, cac, hit), Raw: hit, Color: tchitColor(hit)},
 	}
 }
 

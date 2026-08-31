@@ -1,6 +1,7 @@
 package rtcol
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,15 +42,37 @@ func TestStartLockHeld(t *testing.T) {
 	defer func() { tcprstatBin = old }()
 	c := New(3306, "127.0.0.1")
 	withPaths(t, c)
-	// Pre-create the lock file → O_EXCL must fail.
+	// Pre-create the lock file owned by a LIVE process (ourselves) → the
+	// port lock must refuse a second instance (P1-1).
 	if f, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err != nil {
 		t.Fatal(err)
 	} else {
+		_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
 		f.Close()
 	}
 	if err := c.Start(); err == nil {
 		t.Error("Start with a held lock should error")
 	}
+}
+
+func TestStartStaleLockReclaimed(t *testing.T) {
+	old := tcprstatBin
+	tcprstatBin = writeFakeBin(t, "sleep 60")
+	defer func() { tcprstatBin = old }()
+	c := New(3306, "127.0.0.1")
+	withPaths(t, c)
+	// A lock owned by a dead PID (e.g. 999999, or an empty file) must be
+	// reclaimed instead of blocking the start (P1-1 stale-lock recovery).
+	if f, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err != nil {
+		t.Fatal(err)
+	} else {
+		_, _ = fmt.Fprintf(f, "%d\n", 999999) // almost certainly not alive
+		f.Close()
+	}
+	if err := c.Start(); err != nil {
+		t.Fatalf("Start with a stale lock should reclaim and succeed, got: %v", err)
+	}
+	c.Stop()
 }
 
 func TestStartStopLifecycle(t *testing.T) {

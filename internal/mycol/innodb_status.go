@@ -91,10 +91,17 @@ func parseInnodbStatus(text string) innodbStatusRaw {
 
 // InnodbStatus reports history list, log unflushed/uncheckpointed bytes, read
 // views, and queries inside/queued — parsed from SHOW ENGINE INNODB STATUS.
-type InnodbStatus struct{ src *StatusSource }
+// Byte cells carry Raw bytes (absolute); --unit switches to k/m display.
+type InnodbStatus struct {
+	src  *StatusSource
+	unit metric.UnitMode
+}
 
-func NewInnodbStatus(s *StatusSource) *InnodbStatus { return &InnodbStatus{src: s} }
-func (*InnodbStatus) Name() string                  { return "innodb_status" }
+func NewInnodbStatus(s *StatusSource, unit metric.UnitMode) *InnodbStatus {
+	return &InnodbStatus{src: s, unit: unit}
+}
+
+func (*InnodbStatus) Name() string { return "innodb_status" }
 func (*InnodbStatus) Headline() (string, string) {
 	return "  his --log(byte)--  read ---query--- ", " list uflush  uckpt  view inside  que|"
 }
@@ -109,10 +116,11 @@ func (c *InnodbStatus) Collect() []metric.Cell {
 		return []metric.Cell{{Text: fmt.Sprintf("%5d %6d %6d %5d %5d %5d", 0, 0, 0, 0, 0, 0), Color: metric.White}}
 	}
 	// history WHITE, unflushed/ucheckpointed YELLOW, view/inside/que WHITE.
+	// Leading space on the checkpointed byte column keeps raw values separated.
 	return []metric.Cell{
-		{Text: fmt.Sprintf("%5d ", v.HistoryList), Color: metric.White},
-		{Text: render.FormatBytesKM(float64(v.UnflushedLog), 5, 6) + " ", Color: metric.Yellow},
-		{Text: render.FormatBytesKM(float64(v.UncheckpointedBytes), 6, 7), Color: metric.Yellow},
-		{Text: fmt.Sprintf("%5d %5d %5d", v.ReadViews, v.QueriesInside, v.QueriesQueued), Color: metric.White},
+		{Text: fmt.Sprintf("%5d ", v.HistoryList), Raw: float64(v.HistoryList), Color: metric.White},
+		{Text: render.FormatBytesValue(float64(v.UnflushedLog), c.unit, 5, 6) + " ", Raw: float64(v.UnflushedLog), Color: metric.Yellow},
+		{Text: " " + render.FormatBytesValue(float64(v.UncheckpointedBytes), c.unit, 6, 7), Raw: float64(v.UncheckpointedBytes), Color: metric.Yellow},
+		{Text: fmt.Sprintf("%5d %5d %5d", v.ReadViews, v.QueriesInside, v.QueriesQueued), Raw: float64(v.QueriesInside), Color: metric.White},
 	}
 }

@@ -20,6 +20,7 @@ import (
 // no first-tick guard for cpu.
 type CPU struct {
 	enabled bool // emit cells when -c is set
+	full    bool // --full: emit 9 detail columns instead of 4
 	ncpu    int
 
 	// /proc/stat fields [1..7] from the previous tick: user,nice,system,idle,
@@ -32,16 +33,22 @@ type CPU struct {
 	LastSysDiff  float64
 	LastIdleDiff float64
 	LastIowDiff  float64
-	pct          [4]int // usr,sys,idl,iow percentages
+	pct          [7]float64 // per-field percentages (0..6): usr,nice,sys,idl,iow,irq,soft
 }
 
 // NewCPU returns a CPU collector. enabled controls whether Collect emits
-// cells (false when cpu is only sampled to feed disk).
-func NewCPU(ncpu int, enabled bool) *CPU { return &CPU{enabled: enabled, ncpu: ncpu} }
+// cells (false when cpu is only sampled to feed disk); full enables the
+// 9-column detail output.
+func NewCPU(ncpu int, enabled, full bool) *CPU {
+	return &CPU{enabled: enabled, full: full, ncpu: ncpu}
+}
 
 func (*CPU) Name() string { return "cpu" }
 
-func (*CPU) Headline() (string, string) {
+func (c *CPU) Headline() (string, string) {
+	if c.full {
+		return "------------cpu-usage----------------- ", "  usr nice  sys idle iow  irq soft steal|"
+	}
 	return "---cpu-usage--- ", "usr sys idl iow|"
 }
 
@@ -76,14 +83,12 @@ func (c *CPU) consume(data []byte) {
 	// On the first tick prev is zero, so totalDiff == total2 and the
 	// percentages are since-boot averages (matching Perl). Guard the
 	// (unreachable-in-practice) zero-denominator case.
-	if totalDiff == 0 {
-		c.pct = [4]int{}
-	} else {
-		c.pct = [4]int{
-			int(math.Round(c.LastUserDiff / totalDiff * 100)),
-			int(math.Round(c.LastSysDiff / totalDiff * 100)),
-			int(math.Round(c.LastIdleDiff / totalDiff * 100)),
-			int(math.Round(c.LastIowDiff / totalDiff * 100)),
+	for i := 0; i < 7; i++ {
+		if totalDiff == 0 {
+			c.pct[i] = 0
+		} else {
+			c.pct[i] = float64(v2[i]) - float64(c.prev[i])
+			c.pct[i] = c.pct[i] / totalDiff * 100
 		}
 	}
 	c.prev = v2
@@ -91,18 +96,43 @@ func (c *CPU) consume(data []byte) {
 }
 
 // Collect formats the sampled percentages. Returns nil when not enabled so
-// the renderer skips this segment.
+// the renderer skips this segment. In default mode it emits the Perl-compatible
+// 4 columns (usr sys idl iow); with --full it emits 9 columns
+// (usr nice sys idle iow irq soft steal). Raw percentages are float values.
 func (c *CPU) Collect() []metric.Cell {
 	if !c.enabled {
 		return nil
 	}
-	usr, sys, idl, iow := c.pct[0], c.pct[1], c.pct[2], c.pct[3]
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%3d", usr), Color: cpuUsrColor(usr)},
-		{Text: fmt.Sprintf(" %3d", sys), Color: cpuSysColor(sys)},
-		{Text: fmt.Sprintf(" %3d", idl), Color: metric.White},
-		{Text: fmt.Sprintf(" %3d", iow), Color: cpuIowColor(iow)},
+	// usr = user+nice (Perl), displayed as first column.
+	usr := c.pct[0] + c.pct[1]
+	sys := c.pct[2] + c.pct[5] + c.pct[6] // system+irq+softirq (Perl)
+	idl := c.pct[3]
+	iow := c.pct[4]
+
+	if !c.full {
+		return []metric.Cell{
+			{Text: fmt.Sprintf("%3d", int(math.Round(usr))), Raw: usr, Color: cpuUsrColor(int(math.Round(usr)))},
+			{Text: fmt.Sprintf(" %3d", int(math.Round(sys))), Raw: sys, Color: cpuSysColor(int(math.Round(sys)))},
+			{Text: fmt.Sprintf(" %3d", int(math.Round(idl))), Raw: idl, Color: metric.White},
+			{Text: fmt.Sprintf(" %3d", int(math.Round(iow))), Raw: iow, Color: cpuIowColor(int(math.Round(iow)))},
+		}
 	}
+	// Full 9 columns: usr nice sys idle iow irq soft steal.
+	// steal/guest are beyond the 7 parsed fields — parsed as 0 (matching the
+	// Perl original, which only indexes fields [1..7]).
+	steal := 0.0
+	cells := make([]metric.Cell, 0, 9)
+	cells = append(cells,
+		metric.Cell{Text: fmt.Sprintf("%5.1f", usr), Raw: usr, Color: cpuUsrColor(int(math.Round(usr)))},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", c.pct[1]), Raw: c.pct[1], Color: metric.White},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", sys), Raw: sys, Color: cpuSysColor(int(math.Round(sys)))},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", idl), Raw: idl, Color: metric.White},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", iow), Raw: iow, Color: cpuIowColor(int(math.Round(iow)))},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", c.pct[5]), Raw: c.pct[5], Color: metric.White},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", c.pct[6]), Raw: c.pct[6], Color: metric.White},
+		metric.Cell{Text: fmt.Sprintf("%5.1f", steal), Raw: steal, Color: metric.White},
+	)
+	return cells
 }
 
 // cpuUsrColor: usr>10 RED else GREEN (Perl).

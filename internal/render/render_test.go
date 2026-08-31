@@ -135,3 +135,40 @@ func TestRendererBuildRowColor(t *testing.T) {
 		t.Errorf("color row missing blue-bold separator: %q", out)
 	}
 }
+
+func TestFormatBytesValueRaw(t *testing.T) {
+	// Raw mode (ES-friendly): no suffix, integer bytes, right-aligned to the
+	// wider of the two widths so adjacent raw columns stay separated.
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{0, "      0"}, {512, "    512"}, {2048, "   2048"}, {1572864, "1572864"},
+		{16777216000, "16777216000"},
+	}
+	for _, c := range cases {
+		if got := FormatBytesValue(c.in, metric.UnitRaw, 6, 7); got != c.want {
+			t.Errorf("FormatBytesValue(raw, %v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFormatBytesValueHuman(t *testing.T) {
+	// Human mode delegates to FormatBytesKM (k/m suffixes).
+	if got := FormatBytesValue(1572864, metric.UnitHuman, 6, 7); got != "   1.5m" {
+		t.Errorf("FormatBytesValue(human, 1572864) = %q, want \"   1.5m\"", got)
+	}
+	if got := FormatBytesValue(2048, metric.UnitHuman, 5, 6); got != "    2k" {
+		t.Errorf("FormatBytesValue(human, 2048) = %q, want \"    2k\"", got)
+	}
+}
+
+func TestFormatPercentValue(t *testing.T) {
+	// Raw keeps the float (ES-friendly); human rounds to int (Perl-style).
+	if got := FormatPercentValue(99.6, metric.UnitRaw); got != "99.60" {
+		t.Errorf("FormatPercentValue(raw, 99.6) = %q, want \"99.60\"", got)
+	}
+	if got := FormatPercentValue(99.6, metric.UnitHuman); got != "100" {
+		t.Errorf("FormatPercentValue(human, 99.6) = %q, want \"100\"", got)
+	}
+}

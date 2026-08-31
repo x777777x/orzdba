@@ -36,17 +36,22 @@ type Renderer struct {
 	sys    []Collector // includes the time module, which is sys-styled
 	mysql  []Collector
 	period int // header repeat period in data rows
-	since  int // rows emitted since the last header
 }
 
 // NewRenderer returns a Renderer. period is the header repeat cadence
-// (Perl default 15); color toggles ANSI escapes.
+// (Perl default 15); color toggles ANSI escapes. period <= 0 is normalized to
+// 15 here — this is the single source of truth (P0-1: runLoop must not divide
+// by the raw user-supplied period).
 func NewRenderer(color bool, period int) *Renderer {
 	if period <= 0 {
 		period = 15
 	}
 	return &Renderer{ansi: NewANSI(color), period: period}
 }
+
+// Period returns the normalized header repeat cadence. runLoop uses this
+// instead of the raw flag value so a --header-period 0 can never divide-by-zero.
+func (r *Renderer) Period() int { return r.period }
 
 // AddSys appends a sys-group collector (time/load/cpu/swap/net/disk).
 func (r *Renderer) AddSys(c Collector) { r.sys = append(r.sys, c) }
@@ -112,7 +117,6 @@ func (r *Renderer) BuildRow() string {
 		emit(c, metric.GroupMySQL)
 	}
 	b.WriteString("\n")
-	r.since++
 	return b.String()
 }
 
@@ -129,7 +133,3 @@ func (r *Renderer) sep(g metric.Group) string {
 // ANSI exposes the underlying ANSI helper for callers (e.g. the title block)
 // that need direct escapes.
 func (r *Renderer) ANSI() *ANSI { return r.ansi }
-
-// ResetHeaderCounter forces a header reprint on the next BuildRow (used on
-// day-rollover, where the log moves to a new file and the header must reappear).
-func (r *Renderer) ResetHeaderCounter() { r.since = 0 }

@@ -6,14 +6,27 @@
 // cleanup. There is no `killall`: on exit we SIGTERM *this instance's* child,
 // wait 200ms, SIGKILL as fallback, then unlink its log/lock files (plan §9.5,
 // fixing orzdba-go P0-5).
+//
+// Hardening (P1):
+//   - The process lock is keyed by PORT (not pid), so two orzdba -rt instances
+//     cannot both monitor the same port (previously a per-pid lock name made
+//     the lock a no-op). The lock file stores the owning PID and is cleared
+//     when that PID is no longer alive (stale-lock recovery after SIGKILL).
+//   - All shared fields (cmd/started/restarts) are guarded by a mutex: the
+//     signal handler may call Stop() while the main loop is inside Collect()/
+//     restart(), so without a lock these were a data race.
+//   - The tcprstat log is read from the TAIL (not the whole file, which grew
+//     unboundedly over long runs) and truncated once it exceeds a threshold.
 package rtcol
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -26,25 +39,34 @@ import (
 // (plan §9.5: no PATH lookup, prevents PATH injection).
 var tcprstatBin = "/usr/bin/tcprstat"
 
+// tcprstatLogMax is the size (bytes) at which the log is truncated. At ~100
+// bytes/line this is ~2 hours of 1s samples — far more than the reader needs,
+// and it bounds both disk usage and per-tick read cost (P1-2).
+const tcprstatLogMax = 1 << 20 // 1 MiB
+
 // Collector runs one tcprstat subprocess and reports count/avg/avg_95/avg_99
 // per tick. It implements render.Collector in the mysql group (green '|').
 type Collector struct {
-	port, ip         string
-	cmd              *exec.Cmd
-	logPath, lckPath string
-	started          bool
-	restarts         int         // crash-restart budget (§9.5: abandon after 1 retry)
-	exited           atomic.Bool // set by the Wait goroutine when the child dies
+	port, ip string
+
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	started  bool
+	restarts int         // crash-restart budget (§9.5: abandon after 1 retry)
+	exited   atomic.Bool // set by the Wait goroutine when the child dies
+	logPath  string
+	lckPath  string // /tmp/orzdba_tcprstat.p<port>.lck (port-keyed, P1-1)
 }
 
 // New returns an RT collector for the given MySQL port and listen IP.
+// The lock is keyed by port so two instances cannot double-monitor a port.
 func New(port int, ip string) *Collector {
 	pid := os.Getpid()
 	return &Collector{
 		port:    strconv.Itoa(port),
 		ip:      ip,
 		logPath: fmt.Sprintf("/tmp/orzdba_tcprstat.%d.log", pid),
-		lckPath: fmt.Sprintf("/tmp/orzdba_tcprstat.%d.lck", pid),
+		lckPath: fmt.Sprintf("/tmp/orzdba_tcprstat.p%d.lck", port),
 	}
 }
 
@@ -54,23 +76,60 @@ func (*Collector) Headline() (string, string) {
 	return "--------tcprstat(us)-------- ", "  count    avg 95-avg 99-avg|"
 }
 
-// Start verifies tcprstat exists, takes the process lock, and launches the
+// Start verifies tcprstat exists, takes the port lock, and launches the
 // subprocess with stdout redirected to a 0600 log file. Returns an error
-// (main exits, plan §11.1) if tcprstat is missing or the lock is held.
+// (main exits, plan §11.1) if tcprstat is missing or the port is locked by a
+// live process.
 func (c *Collector) Start() error {
 	if _, err := os.Stat(tcprstatBin); err != nil {
 		return fmt.Errorf("tcprstat not found at %s (−rt is Linux-only and needs the tcprstat binary)", tcprstatBin)
 	}
-	// Process lock: O_CREAT|O_EXCL — fails if another orzdba instance owns it.
-	lck, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("cannot acquire tcprstat lock %s: %w (another orzdba -rt instance?)", c.lckPath, err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.acquireLock(); err != nil {
+		return err
 	}
-	_ = lck.Close()
+	if err := c.launchLocked(); err != nil {
+		_ = os.Remove(c.lckPath)
+		return err
+	}
+	return nil
+}
 
+// acquireLock takes the port lock (O_CREATE|O_EXCL). If a stale lock exists
+// from a crashed process, it recovers by checking whether the recorded PID is
+// still alive (signal 0). P1-1: previously the lock was per-pid and could
+// never guard a second instance; now it is per-port and self-healing.
+func (c *Collector) acquireLock() error {
+	lck, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		// Write our PID so a future instance can detect a stale lock.
+		_, _ = fmt.Fprintf(lck, "%d\n", os.Getpid())
+		return lck.Close()
+	}
+	if !os.IsExist(err) {
+		return fmt.Errorf("cannot create tcprstat lock %s: %w", c.lckPath, err)
+	}
+	// Lock exists - is its owner still alive? (procAlive: signal 0 on Unix.)
+	if pid, ok := readLockPID(c.lckPath); ok {
+		if procAlive(pid) {
+			return fmt.Errorf("cannot acquire tcprstat lock %s: another orzdba -rt instance (pid %d) monitors port %s", c.lckPath, pid, c.port)
+		}
+		// Stale lock: owner is gone. Reclaim it.
+		_ = os.Remove(c.lckPath)
+		if lck, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+			_, _ = fmt.Fprintf(lck, "%d\n", os.Getpid())
+			return lck.Close()
+		}
+	}
+	return fmt.Errorf("cannot acquire tcprstat lock %s (stale lock, remove manually if needed)", c.lckPath)
+}
+
+// launchLocked opens the log file (truncating) and starts the subprocess.
+// Caller must hold c.mu and must remove the lock on failure.
+func (c *Collector) launchLocked() error {
 	logFile, err := os.OpenFile(c.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		_ = os.Remove(c.lckPath)
 		return fmt.Errorf("cannot open tcprstat log %s: %w", c.logPath, err)
 	}
 	_ = os.Chmod(c.logPath, 0o600) // fallback in case a permissive existing file widened it (§9.6)
@@ -80,7 +139,6 @@ func (c *Collector) Start() error {
 	c.cmd.Stderr = nil // discard tcprstat stderr (§9.5)
 	if err := c.cmd.Start(); err != nil {
 		logFile.Close()
-		_ = os.Remove(c.lckPath)
 		return fmt.Errorf("tcprstat start failed: %w", err)
 	}
 	// The child dup'd the fd; the parent's handle can be closed (avoids an
@@ -89,6 +147,7 @@ func (c *Collector) Start() error {
 	// signal 0, masking the crash — plan §9.5 crash detection).
 	logFile.Close()
 	c.exited.Store(false)
+	c.restarts = 0
 	go func() { _ = c.cmd.Wait(); c.exited.Store(true) }()
 	c.started = true
 	return nil
@@ -97,18 +156,20 @@ func (c *Collector) Start() error {
 // Collect reads the last tcprstat log line and renders the 4 RT columns.
 // On crash it retries once (§9.5); further crashes degrade to zeros.
 func (c *Collector) Collect() []metric.Cell {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.started || c.cmd == nil || c.cmd.Process == nil {
 		return zeroRT()
 	}
 	if c.exited.Load() {
 		if c.restarts == 0 {
 			c.restarts++
-			_ = c.restart()
+			_ = c.restartLocked()
 		}
 		// Regardless of restart outcome, this tick has no fresh line → zeros.
 		return zeroRT()
 	}
-	count, avg, avg95, avg99, ok := c.lastSample()
+	count, avg, avg95, avg99, ok := c.lastSampleLocked()
 	if !ok {
 		return zeroRT()
 	}
@@ -120,8 +181,9 @@ func (c *Collector) Collect() []metric.Cell {
 	}
 }
 
-// restart re-launches tcprstat after a crash (one-shot, called from Collect).
-func (c *Collector) restart() error {
+// restartLocked re-launches tcprstat after a crash (one-shot, called from
+// Collect under c.mu).
+func (c *Collector) restartLocked() error {
 	logFile, err := os.OpenFile(c.logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
@@ -140,28 +202,72 @@ func (c *Collector) restart() error {
 	return nil
 }
 
-// lastSample reads the log file's last non-empty line and parses it.
+// lastSample is a lock-free wrapper for tests/external callers that just want
+// the current log tail (no concurrency with Collect). Production uses
+// lastSampleLocked under c.mu.
 func (c *Collector) lastSample() (count, avg, avg95, avg99 int64, ok bool) {
-	data, err := os.ReadFile(c.logPath)
+	return c.lastSampleLocked()
+}
+
+// lastSampleLocked reads the tail of the log file, parses the last non-empty
+// line, and truncates the file once it exceeds tcprstatLogMax (P1-2: bounds
+// both disk usage and per-tick read cost). Caller holds c.mu.
+func (c *Collector) lastSampleLocked() (count, avg, avg95, avg99 int64, ok bool) {
+	f, err := os.Open(c.logPath)
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}
-	var last string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) != "" {
-			last = line
-		}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, 0, 0, 0, false
 	}
+	// Read only the last 64 KiB (or the whole file if smaller).
+	readSize := int64(64 << 10)
+	if fi.Size() < readSize {
+		readSize = fi.Size()
+	}
+	if readSize == 0 {
+		return 0, 0, 0, 0, false
+	}
+	buf := make([]byte, readSize)
+	if _, err := f.Seek(fi.Size()-readSize, 0); err != nil {
+		return 0, 0, 0, 0, false
+	}
+	n, err := f.Read(buf)
+	if err != nil && n == 0 {
+		return 0, 0, 0, 0, false
+	}
+	last := lastNonEmptyLine(buf[:n])
 	if last == "" {
 		return 0, 0, 0, 0, false
 	}
+	// Truncate the file to keep it bounded (keep the tail window we just read).
+	if fi.Size() > tcprstatLogMax {
+		_ = f.Truncate(0)
+		_, _ = f.Seek(0, 0)
+	}
 	return parseRTLine(last)
+}
+
+// lastNonEmptyLine returns the last non-empty line in buf.
+func lastNonEmptyLine(buf []byte) string {
+	lines := bytes.Split(buf, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(string(lines[i])); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // Stop terminates the subprocess and removes log/lock files. Idempotent.
 // The Start/restart Wait goroutine reaps the child, so we signal and poll the
 // exited flag rather than calling Wait again (a second Wait would error).
 func (c *Collector) Stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.cmd != nil && c.cmd.Process != nil && !c.exited.Load() {
 		_ = c.cmd.Process.Signal(syscall.SIGTERM)
 		// Wait up to 200ms for graceful exit, then SIGKILL (§9.5).

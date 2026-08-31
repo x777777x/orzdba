@@ -21,8 +21,13 @@ type config struct {
 	load         bool
 	cpu          bool
 	swap         bool
+	mem          bool
 	disk         string
 	net          string
+
+	// Global presentation flags.
+	unit bool // --unit: human-readable k/m/g units (default raw numbers)
+	full bool // --full: full columns for host-side modules (mem/cpu/net/disk)
 
 	// Composite flags (tracked so we only expand them when explicitly passed).
 	sys    bool
@@ -80,8 +85,13 @@ func parseArgs(argv []string) (*config, error) {
 	fs.BoolVarP(&c.load, "load", "l", false, "")
 	fs.BoolVarP(&c.cpu, "cpu", "c", false, "")
 	fs.BoolVarP(&c.swap, "swap", "s", false, "")
+	fs.BoolVarP(&c.mem, "mem", "m", false, "")
 	fs.StringVarP(&c.disk, "disk", "d", "", "")
 	fs.StringVarP(&c.net, "net", "n", "", "")
+
+	// Global presentation flags: --unit (human units), --full (full columns).
+	fs.BoolVar(&c.unit, "unit", false, "")
+	fs.BoolVar(&c.full, "full", false, "")
 
 	fs.BoolVar(&c.com, "com", false, "")
 	// -hit takes an optional value: bare "-hit" → "1" (1-column), "-hit full"
@@ -135,6 +145,23 @@ func parseArgs(argv []string) (*config, error) {
 	// -mysql is explicitly on the command line.
 	c.expand(fs.Changed)
 	c.countSet = fs.Changed("count")
+
+	// ---- input validation (P0/P2 hardening) ----
+	if c.interval < 1 {
+		return nil, fmt.Errorf("-i/--interval must be >= 1 (got %d); a 0/negative interval would busy-loop and corrupt rates", c.interval)
+	}
+	if c.headerPeriod < 1 {
+		return nil, fmt.Errorf("--header-period must be >= 1 (got %d)", c.headerPeriod)
+	}
+	if c.tpsMode != "iud" && c.tpsMode != "commit" {
+		return nil, fmt.Errorf("--tps-mode must be 'iud' or 'commit' (got %q)", c.tpsMode)
+	}
+	if c.logfileByDay && c.logfile == "" {
+		return nil, fmt.Errorf("-logfile_by_day requires -L/--logfile")
+	}
+	if pos := fs.Args(); len(pos) > 0 {
+		return nil, fmt.Errorf("unexpected positional arguments: %v (orzdba takes only flags)", pos)
+	}
 	return c, nil
 }
 
@@ -147,12 +174,14 @@ func (c *config) expand(changed func(string) bool) {
 		c.mysql = true
 	}
 
-	// -sys: -t -l -c -s (no mysql).
+	// -sys: -t -l -c -s -m (no mysql). Memory (-m) added to make the host
+	// "SysInfo" aggregate complete.
 	if changed("sys") {
 		c.time = true
 		c.load = true
 		c.cpu = true
 		c.swap = true
+		c.mem = true
 	}
 	// -lazy: -t -l -c -s -com -hit (mysql).
 	if changed("lazy") {
@@ -193,6 +222,11 @@ func (c *config) expand(changed func(string) bool) {
 // as the shorthand bundle -s -y -s — parses them as long flags. Single-char
 // shorts (-t, -d, -C, -i, ...) and already-double-dashed args are untouched.
 //
+// Only the exact long names registered in longFlagNames are rewritten. This is
+// a deliberate whitelist: it preserves pflag's native shorthand-with-attached-
+// value syntax like -i5 / -C5 (which must NOT become --i5), while still
+// supporting the Perl-style single-dash long options (-sys, -nocolor, ...).
+//
 // It also merges "-hit full" (the orzdba-go extended-hit syntax, space-
 // separated) into "--hit=full", because pflag's NoOptDefVal on the hit flag
 // only accepts "="-attached values, not space-separated ones.
@@ -206,7 +240,7 @@ func normalizeArgs(args []string) []string {
 			i++ // consume "full"
 			continue
 		}
-		if len(a) > 2 && a[0] == '-' && a[1] != '-' && isLongName(a[1:]) {
+		if len(a) > 2 && a[0] == '-' && a[1] != '-' && longFlagNames[a[1:]] {
 			a = "-" + a // -sys -> --sys
 		}
 		out = append(out, a)
@@ -214,23 +248,41 @@ func normalizeArgs(args []string) []string {
 	return out
 }
 
-// isLongName reports whether s is a plausible long-flag name: 2+ chars of
-// [A-Za-z0-9_]. This excludes "-d=sda" (= is not a name char) and "-5".
-func isLongName(s string) bool {
-	if len(s) < 2 {
-		return false
-	}
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '_':
-		default:
-			return false
-		}
-	}
-	return true
+// longFlagNames is the whitelist of Perl-style single-dash long options that
+// normalizeArgs rewrites to double-dash. Everything else starting with a single
+// dash is left for pflag (short flags, short-with-value like -i5, bundled
+// shorts like -tc, or values like -5).
+var longFlagNames = map[string]bool{
+	"sys":                  true,
+	"mysql":                true,
+	"lazy":                 true,
+	"innodb":               true,
+	"innodb_rows":          true,
+	"innodb_pages":         true,
+	"innodb_data":          true,
+	"innodb_log":           true,
+	"innodb_status":        true,
+	"nocolor":              true,
+	"logfile_by_day":       true,
+	"mysql_user":           true,
+	"mysql_pass":           true,
+	"mysql_timeout":        true,
+	"mysql_tls":            true,
+	"mysql_defaults_file":  true,
+	"mysql_defaults_group": true,
+	"tps_mode":             true,
+	"header_period":        true,
+	"logfile":              true,
+	"hit":                  true,
+	"slave":                true,
+	"semi":                 true,
+	"threads":              true,
+	"bytes":                true,
+	"rt":                   true,
+	"com":                  true,
+	"mem":                  true,
+	"full":                 true,
+	"unit":                 true,
 }
 
 // friendlyParseErr rewrites pflag's cryptic parse errors into a hint with a

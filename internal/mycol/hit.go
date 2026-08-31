@@ -38,6 +38,14 @@ func (h *Hit) Collect() []metric.Cell {
 
 // collectOne is the Perl-compatible 1-column hit (lor + innodb hit%).
 func (h *Hit) collectOne() []metric.Cell {
+	// P2-1: first tick has no previous sample — emit zeros like the other
+	// collectors instead of a misleading "0 / 100.00" green.
+	if !h.src.HasPrev() {
+		return []metric.Cell{
+			{Text: fmt.Sprintf(" %7d", 0), Color: metric.White},
+			{Text: fmt.Sprintf(" %6.2f", 0.0), Color: metric.White},
+		}
+	}
 	rr := h.src.Rate("Innodb_buffer_pool_read_requests")
 	rd := h.src.Rate("Innodb_buffer_pool_reads")
 	hit := 100.0
@@ -45,8 +53,8 @@ func (h *Hit) collectOne() []metric.Cell {
 		hit = (rr - rd) / rr * 100
 	}
 	return []metric.Cell{
-		{Text: fmt.Sprintf(" %7d", int(rr)), Color: metric.White},
-		{Text: fmt.Sprintf(" %6.2f", hit), Color: hitColor(hit)},
+		{Text: fmt.Sprintf(" %7d", int(rr)), Raw: rr, Color: metric.White},
+		{Text: fmt.Sprintf(" %6.2f", hit), Raw: hit, Color: hitColor(hit)},
 	}
 }
 
@@ -80,13 +88,13 @@ func (h *Hit) collectFull() []metric.Cell {
 	innodbHit := pct(1 - rd/rr)
 
 	return []metric.Cell{
-		{Text: fmt.Sprintf("%6.2f", keyReadHit), Color: hitColor(keyReadHit)},
-		{Text: fmt.Sprintf("%7.2f", keyWriteHit), Color: hitColor(keyWriteHit)},
-		{Text: fmt.Sprintf("%7.2f", idxCur), Color: hitColor(idxCur)},
-		{Text: fmt.Sprintf("%7.2f", idxTot), Color: hitColor(idxTot)},
-		{Text: fmt.Sprintf("%7.2f", qHit), Color: hitColor(qHit)},
-		{Text: fmt.Sprintf("%8d", int(rr)), Color: metric.White},
-		{Text: fmt.Sprintf("%7.2f", innodbHit), Color: hitColor(innodbHit)},
+		{Text: fmt.Sprintf("%6.2f", keyReadHit), Raw: keyReadHit, Color: hitColor(keyReadHit)},
+		{Text: fmt.Sprintf("%7.2f", keyWriteHit), Raw: keyWriteHit, Color: hitColor(keyWriteHit)},
+		{Text: fmt.Sprintf("%7.2f", idxCur), Raw: idxCur, Color: hitColor(idxCur)},
+		{Text: fmt.Sprintf("%7.2f", idxTot), Raw: idxTot, Color: hitColor(idxTot)},
+		{Text: fmt.Sprintf("%7.2f", qHit), Raw: qHit, Color: hitColor(qHit)},
+		{Text: fmt.Sprintf("%8d", int(rr)), Raw: rr, Color: metric.White},
+		{Text: fmt.Sprintf("%7.2f", innodbHit), Raw: innodbHit, Color: hitColor(innodbHit)},
 	}
 }
 

@@ -48,7 +48,7 @@ func TestParseCPUStat(t *testing.T) {
 }
 
 func TestCPUSecondTick(t *testing.T) {
-	c := NewCPU(2, true)
+	c := NewCPU(2, true, false)
 	c.consume(mustRead(t, "stat_tick1.txt")) // since-boot baseline
 	c.consume(mustRead(t, "stat_tick2.txt")) // diffs: usr=10 sys=5 idl=85 iow=0
 	cells := c.Collect()
@@ -117,16 +117,37 @@ func TestParseNetDevMiss(t *testing.T) {
 }
 
 func TestNetSecondTick(t *testing.T) {
-	n := NewNet("eth0", 1)
+	// UnitRaw (default): raw byte values, ES-friendly. Leading space keeps the
+	// column separated from its neighbor (run-on fix).
+	n := NewNet("eth0", 1, false, metric.UnitRaw)
 	n.consume(mustRead(t, "netdev_tick1.txt"))
 	cells := n.consume(mustRead(t, "netdev_tick2.txt"))
-	// recv delta 1572864 → 1.5MiB/s → "   1.5m" Red
-	// send delta 1048576 → 1.0MiB/s → k branch → "  1024k" White
-	if cells[0].Text != "   1.5m" || cells[0].Color != metric.Red {
-		t.Errorf("recv = %q/%v, want \"   1.5m\"/Red", cells[0].Text, cells[0].Color)
+	// recv delta 1572864 bytes/s → raw " 1572864", RED (rate > 1MiB/s)
+	// send delta 1048576 bytes/s → raw " 1048576", WHITE
+	if cells[0].Text != " 1572864" || cells[0].Color != metric.Red {
+		t.Errorf("recv raw = %q/%v, want \" 1572864\"/Red", cells[0].Text, cells[0].Color)
 	}
-	if cells[1].Text != "  1024k" || cells[1].Color != metric.White {
-		t.Errorf("send = %q/%v, want \"  1024k\"/White", cells[1].Text, cells[1].Color)
+	if cells[0].Raw != 1572864 {
+		t.Errorf("recv Raw = %v, want 1572864", cells[0].Raw)
+	}
+	if cells[1].Text != " 1048576" || cells[1].Color != metric.White {
+		t.Errorf("send raw = %q/%v, want \" 1048576\"/White", cells[1].Text, cells[1].Color)
+	}
+	if cells[1].Raw != 1048576 {
+		t.Errorf("send Raw = %v, want 1048576", cells[1].Raw)
+	}
+}
+
+func TestNetSecondTickHuman(t *testing.T) {
+	// UnitHuman: k/m suffixes (Perl-compatible display), leading space.
+	n := NewNet("eth0", 1, false, metric.UnitHuman)
+	n.consume(mustRead(t, "netdev_tick1.txt"))
+	cells := n.consume(mustRead(t, "netdev_tick2.txt"))
+	if cells[0].Text != "    1.5m" || cells[0].Color != metric.Red {
+		t.Errorf("recv human = %q/%v, want \"    1.5m\"/Red", cells[0].Text, cells[0].Color)
+	}
+	if cells[1].Text != "   1024k" || cells[1].Color != metric.White {
+		t.Errorf("send human = %q/%v, want \"   1024k\"/White", cells[1].Text, cells[1].Color)
 	}
 }
 
@@ -149,8 +170,8 @@ func TestParseDiskStatPartition(t *testing.T) {
 }
 
 func TestDiskSecondTick(t *testing.T) {
-	cpu := NewCPU(2, false)
-	d := NewDisk(cpu, "sda", 2)
+	cpu := NewCPU(2, false, false)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
 	// Interleave cpu+disk per tick so deltams reflects the right cpu diffs.
 	cpu.consume(mustRead(t, "stat_tick1.txt"))
 	d.consume(mustRead(t, "diskstats_tick1.txt")) // first tick (since-boot), not asserted
@@ -179,5 +200,121 @@ func TestDiskSecondTick(t *testing.T) {
 		if cells[i].Color != w.col {
 			t.Errorf("cell %d color = %v, want %v", i, cells[i].Color, w.col)
 		}
+	}
+}
+
+// ---- mem ----
+
+func TestParseMemInfo(t *testing.T) {
+	m := parseMemInfo(mustRead(t, "meminfo_tick1.txt"))
+	if !m.ok || m.total != 16384000 || m.available != 8000000 {
+		t.Fatalf("parseMemInfo = %+v", m)
+	}
+}
+
+func TestMemUsage(t *testing.T) {
+	m := parseMemInfo(mustRead(t, "meminfo_tick1.txt"))
+	// usage = (16384000-8000000)/16384000*100 = 51.17%
+	if u := m.usage(); u < 51 || u > 52 {
+		t.Errorf("mem usage = %v, want ~51.2", u)
+	}
+}
+
+func TestMemCollectDefault(t *testing.T) {
+	c := NewMem(false, metric.UnitRaw)
+	cells := c.consume(mustRead(t, "meminfo_tick1.txt"))
+	if len(cells) != 1 {
+		t.Fatalf("default mem = %d cells, want 1", len(cells))
+	}
+	if cells[0].Raw < 51 || cells[0].Raw > 52 {
+		t.Errorf("default mem usage Raw = %v, want ~51.2", cells[0].Raw)
+	}
+}
+
+func TestMemCollectFull(t *testing.T) {
+	c := NewMem(true, metric.UnitRaw)
+	cells := c.consume(mustRead(t, "meminfo_tick1.txt"))
+	if len(cells) != 7 {
+		t.Fatalf("full mem = %d cells, want 7", len(cells))
+	}
+	// total Raw = 16384000 kB * 1024 = 16777216000 bytes
+	if cells[1].Raw != 16384000*1024 {
+		t.Errorf("total Raw = %v, want %v", cells[1].Raw, 16384000*1024)
+	}
+}
+
+func TestMemMissingDegrade(t *testing.T) {
+	c := NewMem(false, metric.UnitRaw)
+	cells := c.consume(nil)
+	if len(cells) != 1 || cells[0].Raw != 0 {
+		t.Errorf("missing meminfo = %v, want single 0 cell", cells)
+	}
+}
+
+// ---- multi-disk ----
+
+func TestParseDiskStatsMulti(t *testing.T) {
+	m := parseDiskStats(mustRead(t, "diskstats_multi_tick1.txt"))
+	if len(m) != 3 { // sda, sda1, sdb
+		t.Fatalf("parseDiskStatsMulti = %d devices, want 3: %v", len(m), m)
+	}
+	if s, ok := m["sdb"]; !ok || s.rdIOS != 60 {
+		t.Errorf("sdb = %+v, want rdIOS=60", m["sdb"])
+	}
+}
+
+func TestDiskMultiSecondTick(t *testing.T) {
+	cpu := NewCPU(2, false, false)
+	d := NewDisk(cpu, []string{"sda", "sdb"}, 2, false, metric.UnitRaw)
+	cpu.consume(mustRead(t, "stat_tick1.txt"))
+	d.consume(mustRead(t, "diskstats_multi_tick1.txt")) // baseline
+	cpu.consume(mustRead(t, "stat_tick2.txt"))
+	cells := d.consume(mustRead(t, "diskstats_multi_tick2.txt"))
+	// 2 devices × 7 columns = 14 cells
+	if len(cells) != 14 {
+		t.Fatalf("multi-disk cells = %d, want 14", len(cells))
+	}
+	// sda: rd_ios_s = 1000*(160-100)/500 = 120
+	if cells[0].Raw != 120 {
+		t.Errorf("sda r/s Raw = %v, want 120", cells[0].Raw)
+	}
+	// sdb: rd_ios_s = 1000*(100-60)/500 = 80 (cell index 7)
+	if cells[7].Raw != 80 {
+		t.Errorf("sdb r/s Raw = %v, want 80", cells[7].Raw)
+	}
+}
+
+// ---- full-mode CPU ----
+
+func TestCPUSecondTickFull(t *testing.T) {
+	c := NewCPU(2, true, true)
+	c.consume(mustRead(t, "stat_tick1.txt")) // baseline
+	c.consume(mustRead(t, "stat_tick2.txt")) // diffs: usr=10 sys=5 idl=85 iow=0
+	cells := c.Collect()
+	if len(cells) != 8 {
+		t.Fatalf("full cpu = %d cells, want 8", len(cells))
+	}
+	// usr = user+nice = 10
+	if cells[0].Raw < 9.9 || cells[0].Raw > 10.1 {
+		t.Errorf("full cpu usr Raw = %v, want ~10", cells[0].Raw)
+	}
+}
+
+// ---- full-mode net ----
+
+func TestNetFullSecondTick(t *testing.T) {
+	n := NewNet("eth0", 1, true, metric.UnitRaw)
+	n.consume(mustRead(t, "netdev_tick1.txt"))
+	cells := n.consume(mustRead(t, "netdev_tick2.txt"))
+	if len(cells) != 8 {
+		t.Fatalf("full net = %d cells, want 8", len(cells))
+	}
+	// rxbytes rate = 1572864
+	if cells[0].Raw != 1572864 {
+		t.Errorf("full net rxbytes Raw = %v, want 1572864", cells[0].Raw)
+	}
+	// txbytes rate = 1048576 (cell 4)
+	if cells[4].Raw != 1048576 {
+		t.Errorf("full net txbytes Raw = %v, want 1048576", cells[4].Raw)
 	}
 }

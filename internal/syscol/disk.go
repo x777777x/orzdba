@@ -11,17 +11,24 @@ import (
 // (plan §5.2: "HZ 硬编码 100，与 Perl 一致").
 const HZ = 100
 
-// Disk reads /proc/diskstats for one device and reports iostat-style fields.
-// It uses the Perl deltams formula (plan §7.7) rather than orzdba-go's
+// Disk reads /proc/diskstats for one or more devices and reports iostat-style
+// fields. It uses the Perl deltams formula (plan §7.7) rather than orzdba-go's
 // `ticks/10` shortcut (P1-8), and consumes CPU's jiffies diffs for deltams.
 //
 // Like cpu, disk has no first-tick guard: prev is zero-initialized so the
 // first tick yields since-boot averages (matching Perl).
+//
+// Devices are given as a comma-separated list (-d sda,sdb); each device gets
+// its own column group. full=true (--full) emits the extended iostat fields.
+// unit controls byte presentation: Raw = bytes/s (ES-friendly), Human = KiB/s
+// (Perl-compatible display).
 type Disk struct {
-	cpu  *CPU
-	name string
-	ncpu int
-	prev diskStat
+	cpu     *CPU
+	devices []string
+	ncpu    int
+	full    bool
+	unit    metric.UnitMode
+	prev    map[string]diskStat
 }
 
 // diskStat holds the diskstats fields the formula needs.
@@ -31,21 +38,46 @@ type diskStat struct {
 	totTicks, aveq            uint64
 }
 
-// NewDisk returns a disk collector for device name. cpu provides the jiffies
-// diffs used by deltams (may be nil only if neither -c nor -d is set, which
-// never happens when a Disk exists).
-func NewDisk(cpu *CPU, name string, ncpu int) *Disk {
-	return &Disk{cpu: cpu, name: name, ncpu: ncpu}
+// NewDisk returns a disk collector for the given device list. cpu provides the
+// jiffies diffs used by deltams (may be nil only if neither -c nor -d is set,
+// which never happens when a Disk exists). full enables extended columns; unit
+// selects byte presentation.
+func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, unit metric.UnitMode) *Disk {
+	return &Disk{cpu: cpu, devices: devices, ncpu: ncpu, full: full, unit: unit,
+		prev: make(map[string]diskStat, len(devices))}
 }
 
 func (*Disk) Name() string { return "disk" }
 
-func (*Disk) Headline() (string, string) {
-	return "-------------------------io-usage----------------------- ",
-		"   r/s    w/s    rkB/s    wkB/s  queue await svctm %util|"
+func (d *Disk) Headline() (string, string) {
+	if len(d.devices) == 1 {
+		if d.full {
+			return "-----------------------------io-usage----------------------------- ",
+				"  r/s   w/s  rkB/s  wkB/s  avgqu  avgrq  %iow %util|"
+		}
+		return "-------------------------io-usage----------------------- ",
+			"   r/s    w/s    rkB/s    wkB/s  queue await svctm %util|"
+	}
+	// Multi-device: one column group per device.
+	var l1, l2 strings.Builder
+	for i, dev := range d.devices {
+		if i > 0 {
+			l1.WriteString("  ")
+			l2.WriteString("  ")
+		}
+		if d.full {
+			fmt.Fprintf(&l1, "----%s: io-usage---- ", dev)
+			l2.WriteString(" r/s  w/s rkB/s wkB/s avgqu avgrq %iow %util")
+		} else {
+			fmt.Fprintf(&l1, "----%s: io-usage---- ", dev)
+			l2.WriteString("  r/s   w/s  rkB/s  wkB/s  queue await svctm %util")
+		}
+		l2.WriteString("|")
+	}
+	return l1.String(), l2.String()
 }
 
-// Collect reads /proc/diskstats and formats the seven iostat columns.
+// Collect reads /proc/diskstats and formats the iostat columns for each device.
 func (d *Disk) Collect() []metric.Cell {
 	data, err := readFile("/proc/diskstats")
 	if err != nil {
@@ -54,25 +86,39 @@ func (d *Disk) Collect() []metric.Cell {
 	return d.consume(data)
 }
 
-// consume processes one /proc/diskstats sample and formats the columns.
+// consume processes one /proc/diskstats sample and formats the columns for
+// every configured device, in order.
 func (d *Disk) consume(data []byte) []metric.Cell {
-	cur := parseDiskStat(data, d.name)
+	stats := parseDiskStats(data)
 	deltams := d.deltams()
 	if deltams <= 0 {
 		// /proc unavailable or CPU not sampled: degrade to zeros (plan §11.2).
-		d.prev = cur
-		return zeroDisk()
+		for _, dev := range d.devices {
+			d.prev[dev] = stats[dev]
+		}
+		return d.zeroRow()
 	}
 
-	rdIOS := int64(cur.rdIOS) - int64(d.prev.rdIOS)
-	wrIOS := int64(cur.wrIOS) - int64(d.prev.wrIOS)
-	rdSectors := int64(cur.rdSectors) - int64(d.prev.rdSectors)
-	wrSectors := int64(cur.wrSectors) - int64(d.prev.wrSectors)
-	rdTicks := int64(cur.rdTicks) - int64(d.prev.rdTicks)
-	wrTicks := int64(cur.wrTicks) - int64(d.prev.wrTicks)
-	ticks := int64(cur.totTicks) - int64(d.prev.totTicks)
-	aveq := int64(cur.aveq) - int64(d.prev.aveq)
-	d.prev = cur
+	cells := make([]metric.Cell, 0, len(d.devices)*7)
+	for _, dev := range d.devices {
+		cur := stats[dev]
+		p := d.prev[dev]
+		cells = append(cells, d.deviceCells(dev, cur, p, deltams)...)
+		d.prev[dev] = cur
+	}
+	return cells
+}
+
+// deviceCells computes the iostat fields for one device and returns its cells.
+func (d *Disk) deviceCells(dev string, cur, prev diskStat, deltams float64) []metric.Cell {
+	rdIOS := int64(cur.rdIOS) - int64(prev.rdIOS)
+	wrIOS := int64(cur.wrIOS) - int64(prev.wrIOS)
+	rdSectors := int64(cur.rdSectors) - int64(prev.rdSectors)
+	wrSectors := int64(cur.wrSectors) - int64(prev.wrSectors)
+	rdTicks := int64(cur.rdTicks) - int64(prev.rdTicks)
+	wrTicks := int64(cur.wrTicks) - int64(prev.wrTicks)
+	ticks := int64(cur.totTicks) - int64(prev.totTicks)
+	aveq := int64(cur.aveq) - int64(prev.aveq)
 
 	nIOS := rdIOS + wrIOS
 	nTicks := rdTicks + wrTicks
@@ -88,17 +134,42 @@ func (d *Disk) consume(data []byte) []metric.Cell {
 	}
 	rdIosS := 1000.0 * float64(rdIOS) / deltams
 	wrIosS := 1000.0 * float64(wrIOS) / deltams
-	rkbs := 1000.0 * float64(rdSectors) / deltams / 2
-	wkbs := 1000.0 * float64(wrSectors) / deltams / 2
+	// KiB/s (Perl-compatible display) and bytes/s (ES-friendly raw).
+	rkibs := 1000.0 * float64(rdSectors) / deltams / 2
+	wkibs := 1000.0 * float64(wrSectors) / deltams / 2
+	rdBytesS := 1000.0 * float64(rdSectors) * 512 / deltams
+	wrBytesS := 1000.0 * float64(wrSectors) * 512 / deltams
+	// avg request size in sectors (avgrq-sz) and %iowait.
+	var avgRq float64
+	if nIOS != 0 {
+		avgRq = float64(rdSectors+wrSectors) / float64(nIOS)
+	}
+	percentIow := 0.0
+	if d.cpu != nil {
+		percentIow = d.cpu.LastIowDiff / (d.cpu.LastUserDiff + d.cpu.LastSysDiff + d.cpu.LastIdleDiff + d.cpu.LastIowDiff) * 100
+	}
+	_ = dev
 
+	if !d.full {
+		return []metric.Cell{
+			{Text: fmt.Sprintf("%7.1f%7.1f", rdIosS, wrIosS), Raw: rdIosS, Color: metric.White},
+			{Text: fmt.Sprintf("%8.1f", rkibs), Raw: rdBytesS, Color: diskBytesColor(rkibs)},
+			{Text: fmt.Sprintf(" %8.1f", wkibs), Raw: wrBytesS, Color: diskBytesColor(wkibs)},
+			{Text: fmt.Sprintf(" %5.1f", queue), Raw: queue, Color: metric.White},
+			{Text: fmt.Sprintf(" %6.1f", wait), Raw: wait, Color: diskWaitColor(wait)},
+			{Text: fmt.Sprintf(" %5.1f", svcT), Raw: svcT, Color: diskSvcColor(svcT)},
+			{Text: fmt.Sprintf(" %5.1f", busy), Raw: busy, Color: diskBusyColor(busy)},
+		}
+	}
+	// Full mode: r/s w/s rkB/s wkB/s avgqu-sz avgrq-sz %iow %util
 	return []metric.Cell{
-		{Text: fmt.Sprintf("%7.1f%7.1f", rdIosS, wrIosS), Color: metric.White},
-		{Text: fmt.Sprintf("%8.1f", rkbs), Color: diskBytesColor(rkbs)},
-		{Text: fmt.Sprintf(" %8.1f", wkbs), Color: diskBytesColor(wkbs)},
-		{Text: fmt.Sprintf(" %5.1f", queue), Color: metric.White},
-		{Text: fmt.Sprintf(" %6.1f", wait), Color: diskWaitColor(wait)},
-		{Text: fmt.Sprintf(" %5.1f", svcT), Color: diskSvcColor(svcT)},
-		{Text: fmt.Sprintf(" %5.1f", busy), Color: diskBusyColor(busy)},
+		{Text: fmt.Sprintf(" %5.1f%6.1f", rdIosS, wrIosS), Raw: rdIosS, Color: metric.White},
+		{Text: fmt.Sprintf(" %6.1f", rkibs), Raw: rdBytesS, Color: diskBytesColor(rkibs)},
+		{Text: fmt.Sprintf(" %6.1f", wkibs), Raw: wrBytesS, Color: diskBytesColor(wkibs)},
+		{Text: fmt.Sprintf(" %6.1f", queue), Raw: queue, Color: metric.White},
+		{Text: fmt.Sprintf(" %6.1f", avgRq), Raw: avgRq, Color: metric.White},
+		{Text: fmt.Sprintf(" %5.1f", percentIow), Raw: percentIow, Color: metric.White},
+		{Text: fmt.Sprintf(" %5.1f", busy), Raw: busy, Color: diskBusyColor(busy)},
 	}
 }
 
@@ -140,29 +211,33 @@ func diskBusyColor(v float64) metric.Color {
 	return metric.Green
 }
 
-func zeroDisk() []metric.Cell {
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%7.1f%7.1f", 0.0, 0.0), Color: metric.White},
-		{Text: fmt.Sprintf("%8.1f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %8.1f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.1f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %6.1f", 0.0), Color: metric.Green},
-		{Text: fmt.Sprintf(" %5.1f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.1f", 0.0), Color: metric.Green},
+// zeroRow returns a zero-valued row matching the current column layout.
+func (d *Disk) zeroRow() []metric.Cell {
+	n := 7
+	if d.full {
+		n = 8
 	}
+	cells := make([]metric.Cell, 0, len(d.devices)*n)
+	for range d.devices {
+		for i := 0; i < n; i++ {
+			cells = append(cells, metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White})
+		}
+	}
+	return cells
 }
 
-// parseDiskStat finds the named device in /proc/diskstats and returns its
-// fields. Go's strings.Fields keeps the colon-free numeric layout: the device
-// name is field[2], and the stats Perl indexes as [4],[5],[6],[7],[8],[9],
-// [10],[11],[13],[14] become [3],[4],[5],[6],[7],[8],[9],[10],[12],[13].
-func parseDiskStat(data []byte, dev string) diskStat {
-	var s diskStat
+// parseDiskStats parses every device line in /proc/diskstats into a map keyed
+// by device name. Go's strings.Fields keeps the colon-free numeric layout: the
+// device name is field[2], and the stats Perl indexes as [4],[5],[6],[7],[8],
+// [9],[10],[11],[13],[14] become [3],[4],[5],[6],[7],[8],[9],[10],[12],[13].
+func parseDiskStats(data []byte) map[string]diskStat {
+	out := make(map[string]diskStat)
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 14 || f[2] != dev {
+		if len(f) < 14 {
 			continue
 		}
+		var s diskStat
 		s.rdIOS = parseUint(f[3])
 		s.rdSectors = parseUint(f[5])
 		s.rdTicks = parseUint(f[6])
@@ -171,7 +246,13 @@ func parseDiskStat(data []byte, dev string) diskStat {
 		s.wrTicks = parseUint(f[10])
 		s.totTicks = parseUint(f[12])
 		s.aveq = parseUint(f[13])
-		return s
+		out[f[2]] = s
 	}
-	return s
+	return out
+}
+
+// parseDiskStat returns the named device's stat (zero if absent). Retained for
+// single-device callers and tests.
+func parseDiskStat(data []byte, dev string) diskStat {
+	return parseDiskStats(data)[dev]
 }

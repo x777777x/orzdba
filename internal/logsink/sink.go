@@ -42,12 +42,20 @@ func New(logfile string, byDay bool) (Sink, error) {
 	return newFile(logfile)
 }
 
-// openFile opens (truncating) a 0600 log file + Chmod fallback.
-func openFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+// openFile opens (append) a 0600 log file + Chmod fallback. P1-3: O_APPEND
+// (not O_TRUNC) so restarting orzdba never destroys previously collected data
+// — a monitoring tool must survive a crash/restart without losing its log.
+// newFile reports whether the file was freshly created (empty) so the caller
+// can decide whether to reprint the title block.
+func openFile(path string) (f *os.File, fresh bool, err error) {
+	f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	_ = os.Chmod(path, 0o600)
-	return f, nil
+	// A file is "fresh" (needs a title) if it was empty before appending.
+	if fi, serr := f.Stat(); serr == nil {
+		fresh = fi.Size() == 0
+	}
+	return f, fresh, nil
 }

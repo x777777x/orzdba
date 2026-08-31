@@ -8,12 +8,18 @@ import (
 )
 
 // InnodbLog reports Innodb_os_log_fsyncs (per-second) and os_log_written
-// (per-second bytes, k/m-formatted). Color: RED when written >1 MiB/s, else
-// YELLOW (Perl).
-type InnodbLog struct{ src *StatusSource }
+// (per-second bytes). Color: RED when written >1 MiB/s, else YELLOW (Perl).
+// Raw bytes are bytes/s; --unit switches the display to k/m suffixes.
+type InnodbLog struct {
+	src  *StatusSource
+	unit metric.UnitMode
+}
 
-func NewInnodbLog(s *StatusSource) *InnodbLog { return &InnodbLog{src: s} }
-func (*InnodbLog) Name() string               { return "innodb_log" }
+func NewInnodbLog(s *StatusSource, unit metric.UnitMode) *InnodbLog {
+	return &InnodbLog{src: s, unit: unit}
+}
+
+func (*InnodbLog) Name() string { return "innodb_log" }
 func (*InnodbLog) Headline() (string, string) {
 	return "--innodb log-- ", "fsyncs written|"
 }
@@ -25,8 +31,8 @@ func (c *InnodbLog) Collect() []metric.Cell {
 	written := c.src.Rate("Innodb_os_log_written")
 	// Perl: "%6d " fsyncs WHITE; written "%6.1fm"/"%7s", RED if >1MiB else YELLOW.
 	return []metric.Cell{
-		{Text: fmt.Sprintf("%6d ", fsyncs), Color: metric.White},
-		{Text: render.FormatBytesKM(written, 6, 7), Color: innodbLogColor(written)},
+		{Text: fmt.Sprintf("%6d ", fsyncs), Raw: float64(fsyncs), Color: metric.White},
+		{Text: " " + render.FormatBytesValue(written, c.unit, 6, 7), Raw: written, Color: innodbLogColor(written)},
 	}
 }
 

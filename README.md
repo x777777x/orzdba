@@ -5,9 +5,30 @@
 | | |
 |---|---|
 | **状态** | 活跃开发中 — M0–M8 已完成，M9 待完成 |
-| **测试** | 84 项通过，覆盖 7 个包 |
+| **测试** | 全量单元测试通过（`go test -race ./...`），覆盖 7 个包 |
 | **路线图** | [`go-rewrite-plan.md`](go-rewrite-plan.md)（v2.0 里程碑） |
 | **仓库** | [x777777x/orzdba](https://github.com/x777777x/orzdba) |
+
+## 指标域
+
+| 域 | 指标 | 触发参数 |
+|----|------|---------|
+| **主机级 (host)** | 内存使用率/全字段 | `-m`/`--mem` |
+| | CPU 使用率 | `-c`/`--cpu` |
+| | CPU 负载 | `-l`/`--load` |
+| | 磁盘 IO（单盘或多盘） | `-d`/`--disk sda,sdb` |
+| | 网卡收发 | `-n`/`--net eth0` |
+| | swap | `-s`/`--swap` |
+| **数据库级 (db)** | QPS/TPS、命中率、InnoDB、线程、字节、主从、半同步 | `-mysql`/`-innodb`/`-slave`/`-semi` 等 |
+
+用 `-sys`（host 域合集 `-t -l -c -s -m`）或 `-mysql`（db 域合集）组合即可按域采集，无需额外的 scope 参数。
+
+## 全局展示参数
+
+| 参数 | 说明 |
+|------|------|
+| `--unit` | 默认**原始数值**（bytes/s、字节、百分比浮点，无 k/m/g 后缀，ES 友好）；传 `--unit` 切换为人类可读单位 |
+| `--full` | 对已指定的 host 模块输出**全字段**（内存 total/used/free/avail/buff/cached、CPU 9 列、网卡 rx/tx 8 列、磁盘扩展列） |
 
 ## 安装
 
@@ -25,6 +46,12 @@ go build -o bin/orzdba ./cmd/orzdba
 
 # 完整 MySQL 监控，输出到日志文件并按天轮转
 ./bin/orzdba -lazy -d sda -C 100 -i 2 -L /tmp/orzdba.log -logfile_by_day
+
+# 主机级全字段监控（内存/CPU/网卡/磁盘），原始数值（ES 友好）
+./bin/orzdba -m -c -n eth0 -d sda,sdb --full -i 1
+
+# 人类可读单位（k/m/g）
+./bin/orzdba -lazy --unit -i 1
 ```
 
 运行 `orzdba -h` 可查看完整参数列表。
@@ -84,8 +111,8 @@ testdata/             单元测试用的 /proc 黄金样本
 | M4 | `-mysql` 子模块：com（QPS/TPS）、hit、threads、bytes；首次采样零值、逐 tick 差值 | ✅ 已完成 |
 | M5 | `SHOW ENGINE INNODB STATUS` 文本解析（历史列表、日志、读视图、活动/排队查询） | ✅ 已完成 |
 | M6 | `-slave`（SHOW SLAVE STATUS）、`-semi`（Rpl_semi_sync_*）、`-hit full`（5 列扩展命中率） | ✅ 已完成 |
-| M7 | `-rt` tcprstat 响应时间采集器：子进程生命周期（SIGTERM→200ms→SIGKILL）、崩溃重试一次、0600 日志、O_EXCL 锁 | ✅ 已完成 |
-| M8 | `logsink`：stdout / 单文件（0600）/ 按天轮转文件（标题重打 + 计数器重置） | ✅ 已完成 |
+| M7 | `-rt` tcprstat 响应时间采集器：子进程生命周期（SIGTERM→200ms→SIGKILL）、崩溃重试一次、0600 日志、端口锁（P1-1） | ✅ 已完成 |
+| M8 | `logsink`：stdout / 单文件（0600，追加不截断）/ 按天轮转文件（标题重打 + 计数器重置） | ✅ 已完成 |
 | **M9** | **与 Perl 原版的黄金样本行为对齐测试** | **待完成** |
 
 ## 与 Perl 原版的偏差
@@ -94,13 +121,15 @@ testdata/             单元测试用的 /proc 黄金样本
 
 1. **时间列**：打印 `YYYY-MM-DD HH:MM:SS` 而非 `HH:MM:SS`，每行带完整日期（多日日志文件更方便）。
 2. **网络解析**：使用 `strings.Fields` 分割（`recv` = field[1]、`send` = field[9]）；Perl 的 `split(/\s+|:/)` 存在 off-by-one 错误，会读到空字段。
-3. **磁盘设备检查**：当 `/proc/diskstats` 不存在时（非 Linux 开发机），跳过设备存在性检查，工具退化为零值输出；在 Linux 上遇到真正的无效设备名仍会报错。
+3. **磁盘设备检查**：当 `/proc/diskstats` 不存在时（非 Linux 开发机），跳过设备存在性检查，工具退化为零值输出；在 Linux 上遇到真正的无效设备名仍会报错。网卡同理（`/proc/net/dev`）。
+4. **单位**：默认输出**原始数值**（bytes/s、字节、百分比浮点），不带 k/m/g 后缀——便于转存 Elasticsearch 做趋势分析；用 `--unit` 切换为人类可读单位（Perl 兼容格式）。
+5. **日志追加**：`-L` 与 `-logfile_by_day` 使用追加模式（`O_APPEND`），重启不再清空已有日志；标题块仅在文件为空（新文件）时打印，避免重复标题。
 
 ## 设计约束
 
 | 约束 | 实现方式 |
 |------|---------|
-| **性能** | 每 tick 0 次 fork，≤ 1 条 SQL，RSS ≤ 30 MB |
+| **性能** | 每 tick 0 次 fork，≤ 1 条 SQL（`-innodb_status`/`-slave` 时 ≤ 3 条），RSS ≤ 30 MB；tcprstat 日志尾部读 + 超阈值截断 |
 | **安全** | MySQL 密码不出现在进程命令行；日志文件权限 0600；tcprstat 子进程通过 PID 跟踪（无 `killall`） |
 | **无 shell 调用** | `cat`/`grep`/`sed`/`awk`/`mysql`/`ifconfig` 全部由 Go 标准库或原生驱动替代 |
 
@@ -109,7 +138,7 @@ testdata/             单元测试用的 /proc 黄金样本
 ## 测试
 
 ```bash
-make test            # 运行全部 84 项测试
+make test            # 运行全部单元测试
 go test ./... -v     # 详细输出 — 列出每个测试用例
 go test ./... -cover # 按包显示覆盖率
 ```

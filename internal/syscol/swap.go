@@ -34,11 +34,8 @@ func (*Swap) Headline() (string, string) {
 // Collect reads /proc/vmstat and formats si/so.
 func (s *Swap) Collect() []metric.Cell {
 	data, err := readFile("/proc/vmstat")
-	if err != nil && !s.notFirst {
-		// first tick with no data: still emit zeros and mark first
-		return s.consume(nil)
-	}
 	if err != nil {
+		// Read failure (e.g. non-Linux dev host): degrade to zeros.
 		return s.consume(nil)
 	}
 	return s.consume(data)

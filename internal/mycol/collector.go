@@ -29,6 +29,11 @@ type StatusSource struct {
 	tick     int
 	timeout  time.Duration
 	ok       bool // false when the last Fetch failed (degrade to zeros)
+	// lastOK is the wall-clock time of the last successful Fetch. It is the
+	// denominator for rate computation (P1-6): after a transient failure the
+	// delta spans MORE than one interval, and dividing by the fixed interval
+	// would inflate the next tick's rates ~2x.
+	lastOK time.Time
 }
 
 // statusVars is the superset of variables the -mysql collectors read. Keeping
@@ -107,6 +112,7 @@ func (s *StatusSource) Fetch() {
 	s.curRaw = nextRaw
 	s.tick++
 	s.ok = true
+	s.lastOK = time.Now()
 }
 
 // HasPrev reports whether a previous sample exists (collectors emit zeros when
@@ -129,9 +135,23 @@ func (s *StatusSource) Delta(name string) int64 {
 	return s.cur[name] - s.prev[name]
 }
 
-// Rate returns Delta / interval (per-second), matching Perl's /$interval.
+// Rate returns Delta / elapsed (per-second). P1-6: the denominator is the
+// real wall-clock time since the last successful fetch (floored at the
+// configured interval). After a transient fetch failure the delta spans
+// several intervals; dividing by the fixed interval would overstate the rate.
+// To avoid an in-progress-tick divide-by-near-zero, floor at interval and cap
+// at 10x interval (a server that was down that long should read as a plateau,
+// not a spike).
 func (s *StatusSource) Rate(name string) float64 {
-	return float64(s.Delta(name)) / s.interval
+	delta := float64(s.Delta(name))
+	denom := s.interval
+	if !s.lastOK.IsZero() {
+		elapsed := time.Since(s.lastOK).Seconds()
+		if elapsed > denom {
+			denom = elapsed
+		}
+	}
+	return delta / denom
 }
 
 // CurRaw returns the current raw (unparsed) value of a status variable — for

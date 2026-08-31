@@ -47,8 +47,8 @@ func main() {
 	}
 
 	// umask 077 so any created files (logs, tcprstat output) are 0600-by-default
-	// (plan §8.4).
-	syscall.Umask(0o077)
+	// (plan §8.4). No-op on Windows (see umask_windows.go).
+	setUmask()
 
 	// color: disabled by -nocolor or -L (plan §6: -L implies nocolor).
 	color := !cfg.nocolor && cfg.logfile == ""
@@ -56,14 +56,21 @@ func main() {
 	ncpu := detectCPU()
 	renderer := render.NewRenderer(color, cfg.headerPeriod)
 
+	// Global presentation: --unit (raw numbers by default, human k/m/g when set)
+	// and --full (full column set for host-side modules).
+	unit := metric.UnitRaw
+	if cfg.unit {
+		unit = metric.UnitHuman
+	}
+
 	// System collectors. Created in Perl's column order: time, load, cpu,
-	// swap, net, disk. CPU must precede disk in the renderer so BuildRow calls
-	// cpu.Collect before disk.Collect (disk reads cpu's jiffies diffs); cpu is
-	// also sampled once per tick in runLoop before BuildRow.
+	// swap, mem, net, disk. CPU must precede disk in the renderer so BuildRow
+	// calls cpu.Collect before disk.Collect (disk reads cpu's jiffies diffs);
+	// cpu is also sampled once per tick in runLoop before BuildRow.
 	var cpu *syscol.CPU
 	needCPU := cfg.cpu || cfg.disk != ""
 	if needCPU {
-		cpu = syscol.NewCPU(ncpu, cfg.cpu)
+		cpu = syscol.NewCPU(ncpu, cfg.cpu, cfg.full)
 	}
 	if cfg.time {
 		renderer.AddSys(&timeCol{})
@@ -77,28 +84,44 @@ func main() {
 	if cfg.swap {
 		renderer.AddSys(syscol.NewSwap(cfg.interval))
 	}
+	if cfg.mem {
+		renderer.AddSys(syscol.NewMem(cfg.full, unit))
+	}
 	if cfg.net != "" {
 		if err := validateDevFlag("net", "n", cfg.net); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		renderer.AddSys(syscol.NewNet(cfg.net, cfg.interval))
-	}
-	if cfg.disk != "" {
-		if err := validateDevFlag("disk", "d", cfg.disk); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		// Verify the device exists in /proc/diskstats (plan §11.1 startup error).
-		// Only when /proc/diskstats is readable — on non-Linux dev hosts it's
-		// absent, so we skip the check and let Collect degrade to zeros at
-		// runtime (plan §9.7). This keeps the tool Linux-only for production
-		// without false-positiving on macOS.
-		if err := checkDiskDevice(cfg.disk); err != nil {
+		// P2-4: verify the interface exists (symmetric with disk). Non-Linux
+		// dev hosts (no /proc) skip the check and degrade to zeros at runtime.
+		if err := checkNetDevice(cfg.net); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
-		renderer.AddSys(syscol.NewDisk(cpu, cfg.disk, ncpu))
+		renderer.AddSys(syscol.NewNet(cfg.net, cfg.interval, cfg.full, unit))
+	}
+	if cfg.disk != "" {
+		// Multi-disk: -d sda,sdb (comma-separated). Split and validate each.
+		devices := splitDevices(cfg.disk)
+		if len(devices) == 0 {
+			fmt.Fprintln(os.Stderr, "ERROR: -d requires at least one device name")
+			os.Exit(2)
+		}
+		for _, dev := range devices {
+			if err := validateDevFlag("disk", "d", dev); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		}
+		// Verify each device exists in /proc/diskstats (plan §11.1 startup
+		// error). Only when /proc/diskstats is readable — on non-Linux dev
+		// hosts it's absent, so we skip the check and let Collect degrade to
+		// zeros at runtime (plan §9.7).
+		if err := checkDiskDevices(devices); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		renderer.AddSys(syscol.NewDisk(cpu, devices, ncpu, cfg.full, unit))
 	}
 
 	// MySQL collectors. Open one long-lived connection (plan §9.3) and share a
@@ -123,7 +146,7 @@ func main() {
 		// Collectors in Perl column order: com, hit, innodb_rows, innodb_pages,
 		// innodb_data, innodb_log, innodb_status, threads, bytes, slave, semi.
 		if cfg.com {
-			renderer.AddMySQL(mycol.NewCom(status))
+			renderer.AddMySQL(mycol.NewCom(status, cfg.tpsMode == "commit"))
 		}
 		if cfg.hit != "" {
 			renderer.AddMySQL(mycol.NewHit(status, cfg.hit == "full"))
@@ -135,19 +158,19 @@ func main() {
 			renderer.AddMySQL(mycol.NewInnodbPages(status))
 		}
 		if cfg.innodbData {
-			renderer.AddMySQL(mycol.NewInnodbData(status))
+			renderer.AddMySQL(mycol.NewInnodbData(status, unit))
 		}
 		if cfg.innodbLog {
-			renderer.AddMySQL(mycol.NewInnodbLog(status))
+			renderer.AddMySQL(mycol.NewInnodbLog(status, unit))
 		}
 		if cfg.innodbStatus {
-			renderer.AddMySQL(mycol.NewInnodbStatus(status))
+			renderer.AddMySQL(mycol.NewInnodbStatus(status, unit))
 		}
 		if cfg.threads {
 			renderer.AddMySQL(mycol.NewThreads(status))
 		}
 		if cfg.bytes {
-			renderer.AddMySQL(mycol.NewBytes(status))
+			renderer.AddMySQL(mycol.NewBytes(status, unit))
 		}
 		if cfg.slave {
 			renderer.AddMySQL(mycol.NewSlave(status))
@@ -157,34 +180,59 @@ func main() {
 		}
 	}
 
-	// tcprstat RT collector (M7). -rt implies mysql=true (Perl) so the MySQL
-	// connection/title above are already open. The subprocess is started once
-	// and tracked by PID for precise cleanup (plan §9.5).
-	var rtCol *rtcol.Collector
-	if cfg.rt {
-		rtCol = rtcol.New(cfg.port, primaryIP())
-		if err := rtCol.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-			os.Exit(1)
-		}
-		renderer.AddMySQL(rtCol)
-	}
-
+	// Output sink must be created BEFORE the tcprstat subprocess starts
+	// (P1-4): if the sink fails, we exit without ever spawning tcprstat, so no
+	// orphan child is left behind.
 	sink, err := logsink.New(cfg.logfile, cfg.logfileByDay)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: cannot open logfile %q: %v\n", cfg.logfile, err)
 		os.Exit(1)
 	}
+
+	// tcprstat RT collector (M7). -rt implies mysql=true (Perl) so the MySQL
+	// connection/title above are already open. The subprocess is started once
+	// and tracked by PID for precise cleanup (plan §9.5). P2-7: bail at
+	// startup (instead of silently degrading to zeros) when no usable IPv4
+	// address exists — tcprstat's -l would receive a bogus "?".
+	var rtCol *rtcol.Collector
+	if cfg.rt {
+		ip := primaryIP()
+		if ip == "?" {
+			fmt.Fprintln(os.Stderr, "ERROR: -rt requires a non-loopback IPv4 address, but none was found")
+			os.Exit(1)
+		}
+		rtCol = rtcol.New(cfg.port, ip)
+		if err := rtCol.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		// Safety net: ensure the subprocess is reaped/cleaned up on any path
+		// out of main (P1-4). Stop is idempotent and also invoked by the
+		// signal handler.
+		defer rtCol.Stop()
+		renderer.AddMySQL(rtCol)
+	}
+
 	// writeTitle prints the full title block (banner + host/IP + DB name + Var
-	// lines). Called at startup and on daily-log rotation.
+	// lines). Called at startup (only for a fresh/empty file — P1-3: after a
+	// restart we append, so a second title block would duplicate noise) and on
+	// daily-log rotation (new day's file is always fresh).
 	writeTitle := func(w io.Writer) {
 		fmt.Fprint(w, buildTitle(color))
 		if status != nil {
 			fmt.Fprint(w, mysqlTitleLine(status, color))
-			fmt.Fprint(w, mysqlVarsLines(status, color))
+			fmt.Fprint(w, mysqlVarsLines(status, color, unit))
 		}
 	}
-	writeTitle(sink)
+	// Only print the title at startup if the log file is brand new. For stdout
+	// (no -L) a title is always wanted on the first run.
+	printTitle := true
+	if logf, ok := sink.(interface{ Fresh() bool }); ok {
+		printTitle = logf.Fresh()
+	}
+	if printTitle {
+		writeTitle(sink)
+	}
 
 	// Signal handling: SIGINT/SIGTERM → cleanup + exit 0 (plan §11.3).
 	stop := make(chan os.Signal, 1)
@@ -215,14 +263,17 @@ func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, sta
 	// (Perl §7.13: `count -= mycount`), so we don't mutate cfg.count.
 	remaining, countSet := cfg.count, cfg.countSet
 	for {
-		// -logfile_by_day: rotate at midnight, reprint title, reset counters.
+		// -logfile_by_day: rotate at midnight, reprint title (only when the
+		// new day's file is fresh — P1-3 avoids duplicate titles on append),
+		// reset counters.
 		if rs, ok := sink.(logsink.RotateSink); ok && rs.MaybeRotate(time.Now()) {
-			writeTitle(sink)
+			if logf, isFresh := sink.(interface{ Fresh() bool }); isFresh && logf.Fresh() {
+				writeTitle(sink)
+			}
 			if countSet {
 				remaining -= mycount
 			}
 			mycount = 0
-			r.ResetHeaderCounter()
 		}
 		// -C: exit when mycount > count. This mirrors the Perl original's
 		// `while(1){ if ($mycount > $count) { exit } ... $mycount++; print }`
@@ -231,7 +282,7 @@ func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, sta
 		if countSet && mycount > remaining {
 			return
 		}
-		if mycount%cfg.headerPeriod == 0 {
+		if mycount%r.Period() == 0 {
 			fmt.Fprint(sink, r.Header())
 		}
 		mycount++
@@ -292,8 +343,9 @@ var varByteSized = map[string]bool{
 
 // mysqlVarsLines renders the "Var : key[val] key[val] ..." title block (the
 // print_vars section of Perl print_title). 3 vars per line, 6-space indent on
-// continuation; two groups separated by a blank line. Byte-sized vars use G/M.
-func mysqlVarsLines(status *mycol.StatusSource, color bool) string {
+// continuation; two groups separated by a blank line. Byte-sized vars use G/M
+// in human mode and raw byte integers in raw mode (--unit off).
+func mysqlVarsLines(status *mycol.StatusSource, color bool, unit metric.UnitMode) string {
 	a := render.NewANSI(color)
 	var b strings.Builder
 	b.WriteString(a.Escape(metric.Red))
@@ -311,7 +363,11 @@ func mysqlVarsLines(status *mycol.StatusSource, color bool) string {
 			}
 			if varByteSized[name] {
 				if f, err := strconv.ParseFloat(val, 64); err == nil {
-					val = render.FormatBytesAutoG(f)
+					if unit == metric.UnitHuman {
+						val = render.FormatBytesAutoG(f)
+					} else {
+						val = strconv.FormatInt(int64(f), 10)
+					}
 				}
 			}
 			b.WriteString(a.Escape(metric.Magenta))
@@ -376,21 +432,36 @@ func validateDevFlag(name, shortFlag, val string) error {
 	return nil
 }
 
-// checkDiskDevice verifies the device appears in /proc/diskstats. It returns
-// nil when the device is found, OR when /proc/diskstats is unreadable (non-Linux
-// dev hosts have no /proc) — in the latter case we can't check, so we skip the
-// startup error and let the collector degrade to zeros at runtime (plan §9.7).
-// It returns an error only when /proc/diskstats IS readable and the device is
-// absent — a genuine bad device name on Linux (plan §11.1).
-func checkDiskDevice(dev string) error {
+// checkDiskDevices verifies every device in the list appears in
+// /proc/diskstats. It returns nil when all are found, OR when /proc/diskstats
+// is unreadable (non-Linux dev hosts have no /proc) — in the latter case we
+// can't check, so we skip the startup error and let the collector degrade to
+// zeros at runtime (plan §9.7). It returns an error only when /proc/diskstats
+// IS readable and some device is absent (plan §11.1).
+func checkDiskDevices(devices []string) error {
 	data, err := os.ReadFile("/proc/diskstats")
 	if err != nil {
 		return nil // /proc absent (non-Linux) — skip check, degrade at runtime
 	}
-	if !findDiskDevice(data, dev) {
-		return fmt.Errorf("disk device %q not found in /proc/diskstats", dev)
+	for _, dev := range devices {
+		if !findDiskDevice(data, dev) {
+			return fmt.Errorf("disk device %q not found in /proc/diskstats", dev)
+		}
 	}
 	return nil
+}
+
+// splitDevices splits a comma-separated device list (-d sda,sdb) into
+// non-empty trimmed entries.
+func splitDevices(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // findDiskDevice reports whether dev appears as a device name (field[2]) in
@@ -399,6 +470,37 @@ func findDiskDevice(data []byte, dev string) bool {
 	for _, line := range strings.Split(string(data), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 3 && f[2] == dev {
+			return true
+		}
+	}
+	return false
+}
+
+// checkNetDevice verifies the interface appears in /proc/net/dev. Like
+// checkDiskDevice, it returns nil when /proc/net/dev is unreadable (non-Linux
+// dev hosts) and errors only when /proc IS readable but the interface is
+// absent — a genuine bad interface name on Linux (plan §11.1, symmetric with
+// disk). P2-4: previously -n silently output zeros forever on a typo.
+func checkNetDevice(dev string) error {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return nil // /proc absent (non-Linux) — skip check, degrade at runtime
+	}
+	if !findNetDevice(data, dev) {
+		return fmt.Errorf("network interface %q not found in /proc/net/dev", dev)
+	}
+	return nil
+}
+
+// findNetDevice reports whether dev appears as an interface name in
+// /proc/net/dev content (first field, trailing colon stripped).
+func findNetDevice(data []byte, dev string) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if strings.TrimSuffix(f[0], ":") == dev {
 			return true
 		}
 	}
@@ -424,8 +526,12 @@ Command line options :
    -l,--load           Print Load Info.
    -c,--cpu            Print Cpu  Info.
    -s,--swap           Print Swap Info.
-   -d,--disk           Print Disk Info.
-   -n,--net            Print Net  Info.
+   -m,--mem            Print Memory Usage% (--full for all mem fields).
+   -d,--disk           Print Disk Info.  Comma-separated for multiple: -d sda,sdb.
+   -n,--net            Print Net  Info.  (--full for rx/tx detail columns)
+
+   --unit              Human-readable k/m/g units (default: raw numbers, ES-friendly).
+   --full              Full detail columns for the selected host modules (mem/cpu/net/disk).
 
    -P,--port           Port number to use for mysql connection(default 3306).
    -S,--socket         Socket file to use for mysql connection.
@@ -450,18 +556,20 @@ Command line options :
 
    -mysql              Print MySQLInfo (include -t,-com,-hit,-T,-B).
    -innodb             Print InnodbInfo(include -t,-innodb_pages,-innodb_data,-innodb_log,-innodb_status)
-   -sys                Print SysInfo   (include -t,-l,-c,-s).
+   -sys                Print SysInfo   (include -t,-l,-c,-s,-m).
    -lazy               Print Info      (include -t,-l,-c,-s,-com,-hit).
    -slave              Print SHOW SLAVE STATUS.
    -semi               Print semi-sync replication status.
    --tps-mode          iud (default) | commit.
    --header-period     Header repeat period (default 15).
 
-   -L,--logfile        Print to Logfile. (implies -nocolor)
+   -L,--logfile        Print to Logfile. (implies -nocolor; appends, never truncates)
    -logfile_by_day     One day a logfile, suffix 'yyyy-mm-dd'; valid with -L.
 
 Sample :
-   shell> nohup ./orzdba -lazy -d sda -C 5 -i 2 -L /tmp/orzdba.log  > /dev/null 2>&1 &
+   shell> nohup ./orzdba -lazy -d sda,sdb -C 5 -i 2 -L /tmp/orzdba.log  > /dev/null 2>&1 &
+   shell> ./orzdba -m -c -n eth0 -d sda --full -i 1        # full host metrics
+   shell> ./orzdba -lazy --unit -i 1                       # human-readable units
 ==========================================================================================
 `)
 }

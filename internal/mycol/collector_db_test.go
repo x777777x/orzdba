@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"orzdba/internal/metric"
 )
 
 // ---- StatusSource.Fetch: cur/prev shift + raw map + ok flag ----
@@ -223,7 +225,7 @@ func TestInnodbStatusCollectDegraded(t *testing.T) {
 	s := NewStatusSource(mockDB(), 1, time.Second)
 	s.tick = 2
 	s.ok = true // HasPrev() true
-	c := NewInnodbStatus(s)
+	c := NewInnodbStatus(s, metric.UnitRaw)
 	cells := c.Collect()
 	want := fmt.Sprintf("%5d %6d %6d %5d %5d %5d", 0, 0, 0, 0, 0, 0)
 	if cells[0].Text != want {
@@ -233,7 +235,7 @@ func TestInnodbStatusCollectDegraded(t *testing.T) {
 
 func TestInnodbStatusFirstTickZeros(t *testing.T) {
 	s := NewStatusSource(mockDB(), 1, time.Second) // tick 0
-	cells := NewInnodbStatus(s).Collect()
+	cells := NewInnodbStatus(s, metric.UnitRaw).Collect()
 	if cells[0].Text != fmt.Sprintf("%5d %6d %6d %5d %5d %5d", 0, 0, 0, 0, 0, 0) {
 		t.Errorf("first-tick innodb_status = %q, want zeros", cells[0].Text)
 	}
@@ -243,7 +245,7 @@ func TestInnodbStatusFirstTickZeros(t *testing.T) {
 
 func TestInnodbDataFirstTickZeros(t *testing.T) {
 	s := NewStatusSource(mockDB(), 1, time.Second) // tick 0, HasPrev false
-	cells := NewInnodbData(s).Collect()
+	cells := NewInnodbData(s, metric.UnitRaw).Collect()
 	if cells[0].Text != fmt.Sprintf("%6d %6d %6d %6d", 0, 0, 0, 0) {
 		t.Errorf("first-tick innodb_data = %q, want zeros", cells[0].Text)
 	}
@@ -251,7 +253,7 @@ func TestInnodbDataFirstTickZeros(t *testing.T) {
 
 func TestInnodbLogFirstTickZeros(t *testing.T) {
 	s := NewStatusSource(mockDB(), 1, time.Second)
-	cells := NewInnodbLog(s).Collect()
+	cells := NewInnodbLog(s, metric.UnitRaw).Collect()
 	if cells[0].Text != fmt.Sprintf("%6d %7d", 0, 0) {
 		t.Errorf("first-tick innodb_log = %q, want zeros", cells[0].Text)
 	}

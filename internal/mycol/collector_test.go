@@ -63,7 +63,7 @@ func TestStatusSourceHasPrev(t *testing.T) {
 func TestComCollect(t *testing.T) {
 	cur := map[string]int64{"Com_insert": 40, "Com_update": 15, "Com_delete": 5, "Com_select": 300}
 	prev := map[string]int64{"Com_insert": 10, "Com_update": 5, "Com_delete": 0, "Com_select": 100}
-	c := NewCom(newTestSource(cur, prev, nil))
+	c := NewCom(newTestSource(cur, prev, nil), false)
 	cells := c.Collect()
 	// ins=30 upd=10 del=5 sel=200 tps=45
 	want := fmt.Sprintf("%5d %5d %5d", 30, 10, 5)
@@ -80,7 +80,7 @@ func TestComCollect(t *testing.T) {
 
 func TestComFirstTickZeros(t *testing.T) {
 	s := NewStatusSource(nil, 1, time.Second) // tick 0, no prev
-	cells := NewCom(s).Collect()
+	cells := NewCom(s, false).Collect()
 	if cells[0].Text != "    0     0     0" {
 		t.Errorf("first-tick com = %q, want zeros", cells[0].Text)
 	}
@@ -221,27 +221,27 @@ func TestInnodbPages(t *testing.T) {
 func TestInnodbData(t *testing.T) {
 	cur := map[string]int64{"Innodb_data_reads": 300, "Innodb_data_writes": 400, "Innodb_data_read": 5 << 20, "Innodb_data_written": 1 << 20}
 	prev := map[string]int64{"Innodb_data_reads": 200, "Innodb_data_writes": 300, "Innodb_data_read": 0, "Innodb_data_written": 0}
-	cells := NewInnodbData(newTestSource(cur, prev, nil)).Collect()
+	cells := NewInnodbData(newTestSource(cur, prev, nil), metric.UnitHuman).Collect()
 	// reads=100 writes=100; read delta=5MiB → "5.0m"? /1024/1024=5 >1 → "%5.1fm" of 5 = "  5.0m"
 	if cells[0].Text != "   100    100 " || cells[0].Color != metric.White {
 		t.Errorf("data reads/writes = %q/%v", cells[0].Text, cells[0].Color)
 	}
-	// read 5MiB → >9? no (5 not >9) → White. format >1MiB → "  5.0m"
-	if cells[1].Text != "  5.0m" || cells[1].Color != metric.White {
-		t.Errorf("data read = %q/%v, want \"  5.0m\"/White", cells[1].Text, cells[1].Color)
+	// read 5MiB → >9? no (5 not >9) → White. format >1MiB → "   5.0m"
+	if cells[1].Text != "   5.0m" || cells[1].Color != metric.White {
+		t.Errorf("data read = %q/%v, want \"   5.0m\"/White", cells[1].Text, cells[1].Color)
 	}
 }
 
 func TestInnodbLog(t *testing.T) {
 	cur := map[string]int64{"Innodb_os_log_fsyncs": 30, "Innodb_os_log_written": 2 << 20}
 	prev := map[string]int64{"Innodb_os_log_fsyncs": 20, "Innodb_os_log_written": 0}
-	cells := NewInnodbLog(newTestSource(cur, prev, nil)).Collect()
+	cells := NewInnodbLog(newTestSource(cur, prev, nil), metric.UnitHuman).Collect()
 	// fsyncs=10; written 2MiB → >1 → "%6.1fm" of 2 = "   2.0m" (7 wide), Red (>1)
 	if cells[0].Text != "    10 " || cells[0].Color != metric.White {
 		t.Errorf("log fsyncs = %q/%v", cells[0].Text, cells[0].Color)
 	}
-	if cells[1].Text != "   2.0m" || cells[1].Color != metric.Red {
-		t.Errorf("log written = %q/%v, want \"   2.0m\"/Red", cells[1].Text, cells[1].Color)
+	if cells[1].Text != "    2.0m" || cells[1].Color != metric.Red {
+		t.Errorf("log written = %q/%v, want \"    2.0m\"/Red", cells[1].Text, cells[1].Color)
 	}
 }
 
@@ -421,5 +421,31 @@ func TestHitColor(t *testing.T) {
 	}
 	if hitColor(50) != metric.Red {
 		t.Error("50 should be Red")
+	}
+}
+
+// ---- P1-6: rate uses real elapsed time after a gap ----
+
+func TestRateUsesElapsedAfterGap(t *testing.T) {
+	// interval=1, but 5 seconds elapsed since the last successful fetch:
+	// the delta (spanning 5 intervals) must be divided by 5, not 1.
+	s := NewStatusSource(nil, 1, time.Second)
+	s.cur = map[string]int64{"Com_select": 1500}
+	s.prev = map[string]int64{"Com_select": 1000}
+	s.tick = 2
+	s.ok = true
+	s.lastOK = time.Now().Add(-5 * time.Second)
+	// delta = 500 over 5s → 100/s (not 500/s as the old code would show).
+	if r := s.Rate("Com_select"); r > 101 || r < 99 {
+		t.Errorf("Rate after gap = %v, want ~100", r)
+	}
+}
+
+func TestRateFloorsAtInterval(t *testing.T) {
+	// With lastOK zero (unset, as in newTestSource), Rate must fall back to
+	// the configured interval rather than 0 (which would produce +Inf).
+	s := newTestSource(map[string]int64{"Com_select": 300}, map[string]int64{"Com_select": 100}, nil)
+	if r := s.Rate("Com_select"); r != 200 {
+		t.Errorf("Rate with unset lastOK = %v, want 200", r)
 	}
 }

@@ -27,11 +27,24 @@ const (
 	OnBlue
 )
 
-// Cell is one formatted column value with its color.
+// Cell is one formatted column value with its color. Text is what the
+// renderer prints; Raw carries the original numeric value (bytes/s, bytes,
+// percent) for ES/trending consumption — set by collectors regardless of the
+// unit mode, so downstream JSON export never needs to re-parse formatted text.
 type Cell struct {
 	Text  string
+	Raw   float64 // raw numeric value (0 when not applicable)
 	Color Color
 }
+
+// UnitMode controls how byte/percent-valued metrics are presented.
+// UnitRaw is the default and is ES-friendly: raw numbers, no k/m/g suffix.
+type UnitMode uint8
+
+const (
+	UnitRaw   UnitMode = iota // raw numbers (bytes/s, bytes, percent float)
+	UnitHuman                 // human-readable k/m/g suffixes (Perl-compatible)
+)
 
 // Group tags a collector's output so the renderer picks the right separator
 // style: sys-group segments get a bold-blue '|', mysql-group segments a green

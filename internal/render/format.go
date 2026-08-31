@@ -3,6 +3,8 @@ package render
 import (
 	"fmt"
 	"math"
+
+	"orzdba/internal/metric"
 )
 
 // FormatBytesRate formats a bytes-per-second rate as k/m/g, mirroring the
@@ -47,6 +49,33 @@ func FormatBytesAutoG(b float64) string {
 		return fmt.Sprintf("%gM", b/1024/1024)
 	}
 	return fmt.Sprintf("%d", int64(b))
+}
+
+// FormatBytesValue formats a byte rate/absolute value according to mode.
+// UnitRaw prints the raw integer (no suffix) — ES-friendly; UnitHuman delegates
+// to FormatBytesKM (k/m suffixes, Perl-compatible). mWidth/sWidth are the
+// FormatBytesKM widths. In UnitRaw mode the value is right-aligned to the
+// wider of the two widths with at least one leading space, so adjacent raw
+// columns stay visually separated even when a value overflows the width
+// (without the leading space, raw columns concatenate into a run-on line).
+func FormatBytesValue(b float64, mode metric.UnitMode, mWidth, sWidth int) string {
+	if mode == metric.UnitRaw {
+		w := mWidth
+		if sWidth > w {
+			w = sWidth
+		}
+		return fmt.Sprintf("%*d", w, int64(b))
+	}
+	return FormatBytesKM(b, mWidth, sWidth)
+}
+
+// FormatPercentValue formats a percentage according to mode. UnitRaw keeps the
+// full float (e.g. "99.60") for ES; UnitHuman prints the integer (Perl-style).
+func FormatPercentValue(p float64, mode metric.UnitMode) string {
+	if mode == metric.UnitRaw {
+		return fmt.Sprintf("%.2f", p)
+	}
+	return fmt.Sprintf("%d", int(math.Round(p)))
 }
 
 // RoundInt mirrors Perl's int(x+0.5) half-up rounding (plan §7.2, fixing
