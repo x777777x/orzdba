@@ -111,6 +111,28 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 | `--mysql-timeout` | SQL/连接超时（默认 1s） |
 | `--mysql-tls` | 启用 TLS |
 
+### 运维参数
+
+| 参数 | 说明 |
+|------|------|
+| `--daemon` | 后台运行（daemon 化，仅 Unix；Windows 不支持）。不指定 `-L` 时自动写 `/tmp/orzdba.log`（按天截转） |
+| `-L <path> --also-stdout` | 写文件的同时也输出到 stdout（双写）；文件默认按天截转需加 `-logfile_by_day` |
+| `-noheader` | 不输出表头（启动标题块 + 周期性表头都关闭） |
+| `--sep <s>` | 自定义数据行列分隔符（默认 `\|`；`\t` 表示制表符；指定后所有列用同一符号） |
+
+示例：
+
+```bash
+# 后台运行 MySQL 监控，日志按天截转
+./bin/orzdba --daemon -mysql -L /var/log/orzdba.log -logfile_by_day
+
+# 前台运行，同时输出到屏幕和文件
+./bin/orzdba -sys -L /tmp/orzdba.log --also-stdout -i 1
+
+# 无表头、逗号分隔（便于导入表格/脚本处理）
+./bin/orzdba -sys -noheader --sep , -i 1 -C 5
+```
+
 运行 `orzdba -h` 可查看完整参数列表。
 
 ## 设计要点

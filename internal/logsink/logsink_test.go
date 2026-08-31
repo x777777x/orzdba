@@ -1,6 +1,7 @@
 package logsink
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,27 +38,35 @@ func TestFileNotWritableErrors(t *testing.T) {
 }
 
 func TestNewFactory(t *testing.T) {
-	s, err := New("", false)
+	s, err := New("", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.(*Stdout); !ok {
-		t.Error("New('',false) should return *Stdout")
+		t.Error("New('',false,false) should return *Stdout")
 	}
 	dir := t.TempDir()
-	f, err := New(filepath.Join(dir, "a.log"), false)
+	f, err := New(filepath.Join(dir, "a.log"), false, false)
 	if err != nil || f == nil {
-		t.Errorf("New(path,false) failed: %v", err)
+		t.Errorf("New(path,false,false) failed: %v", err)
 	}
 	if _, ok := f.(*File); !ok {
-		t.Error("New(path,false) should return *File")
+		t.Error("New(path,false,false) should return *File")
 	}
-	d, err := New(filepath.Join(dir, "b.log"), true)
+	d, err := New(filepath.Join(dir, "b.log"), true, false)
 	if err != nil || d == nil {
-		t.Errorf("New(path,true) failed: %v", err)
+		t.Errorf("New(path,true,false) failed: %v", err)
 	}
 	if _, ok := d.(*DailyFile); !ok {
-		t.Error("New(path,true) should return *DailyFile")
+		t.Error("New(path,true,false) should return *DailyFile")
+	}
+	// --also-stdout with a file → Tee (stdout + file double-write).
+	te, err := New(filepath.Join(dir, "c.log"), false, true)
+	if err != nil || te == nil {
+		t.Errorf("New(path,false,true) failed: %v", err)
+	}
+	if _, ok := te.(*Tee); !ok {
+		t.Error("New(path,false,true) should return *Tee")
 	}
 }
 
@@ -112,5 +121,79 @@ func TestDailyFileRotatesNextDay(t *testing.T) {
 	b, _ := os.ReadFile(tomorrowPath)
 	if string(b) != "day2\n" {
 		t.Errorf("new-day write went to %q, want day2 in %s", string(b), tomorrowPath)
+	}
+}
+
+// TestTeeDoubleWrite verifies --also-stdout behavior: one Write reaches both
+// stdout and the file.
+func TestTeeDoubleWrite(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "t.log")
+	file, err := newFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	var buf bytes.Buffer
+	tee := NewTee(&buf, file)
+	if _, err := tee.Write([]byte("row1\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "row1\n" {
+		t.Errorf("stdout side = %q, want \"row1\\n\"", got)
+	}
+	b, _ := os.ReadFile(p)
+	if string(b) != "row1\n" {
+		t.Errorf("file side = %q, want \"row1\\n\"", string(b))
+	}
+}
+
+// TestTeeDailyFileRotate verifies Tee delegates rotation to an inner
+// DailyFile, so --also-stdout with -logfile_by_day still rotates.
+func TestTeeDailyFileRotate(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "o.log")
+	df, err := newDailyFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer df.Close()
+	var buf bytes.Buffer
+	tee := NewTee(&buf, df)
+	if r := tee.MaybeRotate(time.Now()); r {
+		t.Error("MaybeRotate(same day) via Tee returned true, want false")
+	}
+	tomorrow := time.Now().AddDate(0, 0, 1)
+	if r := tee.MaybeRotate(tomorrow); !r {
+		t.Error("MaybeRotate(next day) via Tee returned false, want true")
+	}
+}
+
+// TestTeeFresh verifies Fresh is delegated to the inner file.
+func TestTeeFresh(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "fresh.log")
+	file, err := newFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	tee := NewTee(&bytes.Buffer{}, file)
+	if !tee.Fresh() {
+		t.Error("Tee.Fresh() on a brand-new file = false, want true")
+	}
+	if _, err := tee.Write([]byte("x\n")); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen a second file (already non-empty) → Fresh false.
+	file2, err := newFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file2.Close()
+	tee2 := NewTee(&bytes.Buffer{}, file2)
+	if tee2.Fresh() {
+		t.Error("Tee.Fresh() on a non-empty file = true, want false")
 	}
 }

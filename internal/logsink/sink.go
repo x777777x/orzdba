@@ -30,16 +30,28 @@ type RotateSink interface {
 	MaybeRotate(now time.Time) bool
 }
 
-// New returns the appropriate sink: stdout when no logfile, a single File
-// otherwise, or a DailyFile when -logfile_by_day is set.
-func New(logfile string, byDay bool) (Sink, error) {
+// New returns the appropriate sink:
+//   - no logfile            → Stdout (stdout only)
+//   - -L path (--also-stdout off) → File/DailyFile (file only; historical behavior)
+//   - -L path --also-stdout → Tee (stdout + file)
+func New(logfile string, byDay, alsoStdout bool) (Sink, error) {
 	if logfile == "" {
 		return &Stdout{}, nil
 	}
+	var file Sink
+	var err error
 	if byDay {
-		return newDailyFile(logfile)
+		file, err = newDailyFile(logfile)
+	} else {
+		file, err = newFile(logfile)
 	}
-	return newFile(logfile)
+	if err != nil {
+		return nil, err
+	}
+	if alsoStdout {
+		return NewTee(os.Stdout, file), nil
+	}
+	return file, nil
 }
 
 // openFile opens (append) a 0600 log file + Chmod fallback. P1-3: O_APPEND

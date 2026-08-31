@@ -30,6 +30,12 @@ type config struct {
 	unit bool // --unit: human-readable k/m/g units (default raw numbers)
 	full bool // --full: full columns for host-side modules (mem/cpu/net/disk)
 
+	// Ops flags.
+	daemon     bool   // -d/--daemon: run in the background (daemonize, Unix only)
+	alsoStdout bool   // --also-stdout: with -L, also write rows to stdout (tee)
+	noheader   bool   // -noheader: suppress the title block and periodic headers
+	sep        string // --sep: custom column separator for data rows (default "|")
+
 	// Composite flags (tracked so we only expand them when explicitly passed).
 	sys    bool
 	lazy   bool
@@ -131,6 +137,13 @@ func parseArgs(argv []string) (*config, error) {
 	fs.StringVarP(&c.logfile, "logfile", "L", "", "")
 	fs.BoolVar(&c.logfileByDay, "logfile_by_day", false, "")
 
+	// Ops flags. Note: no -d short flag for --daemon (the -d short is already
+	// taken by --disk).
+	fs.BoolVar(&c.daemon, "daemon", false, "")
+	fs.BoolVar(&c.alsoStdout, "also-stdout", false, "")
+	fs.BoolVar(&c.noheader, "noheader", false, "")
+	fs.StringVar(&c.sep, "sep", "", "") // "" means the default "|"
+
 	if err := fs.Parse(argv); err != nil {
 		return nil, friendlyParseErr(err)
 	}
@@ -160,6 +173,9 @@ func parseArgs(argv []string) (*config, error) {
 	}
 	if c.logfileByDay && c.logfile == "" {
 		return nil, fmt.Errorf("-logfile_by_day requires -L/--logfile")
+	}
+	if c.alsoStdout && c.logfile == "" {
+		return nil, fmt.Errorf("--also-stdout requires -L/--logfile (it only makes sense when writing to a file too)")
 	}
 	if pos := fs.Args(); len(pos) > 0 {
 		return nil, fmt.Errorf("unexpected positional arguments: %v (orzdba takes only flags)", pos)
@@ -265,6 +281,10 @@ var longFlagNames = map[string]bool{
 	"innodb_log":           true,
 	"innodb_status":        true,
 	"nocolor":              true,
+	"noheader":             true,
+	"daemon":               true,
+	"also-stdout":          true,
+	"sep":                  true,
 	"logfile_by_day":       true,
 	"mysql_user":           true,
 	"mysql_pass":           true,

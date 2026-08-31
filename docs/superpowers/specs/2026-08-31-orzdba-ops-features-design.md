@@ -23,22 +23,22 @@
 
 | 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `-d` / `--daemon` | bool | off | 后台 daemon 化运行（仅 Unix；Windows 报错） |
+| `--daemon` | bool | off | 后台 daemon 化运行（仅 Unix；Windows 报错；无短 `-d`，因 `-d` 已被 `--disk` 占用） |
 | `--also-stdout` | bool | off | 与 `-L` 配合：写文件的同时输出到 stdout |
 | `-noheader` | bool | off | 不输出表头（启动标题块 + 周期性表头） |
 | `--sep` | string | `"|"` | 数据行列间分隔符；`\t` 表示制表符；指定后所有列用同一符号 |
 
 **参数交互**：
-- `-d` 且未指定 `-L` → 自动 `-L /tmp/orzdba.log`（daemon 必须有落盘）
-- `-d` 且指定 `-L` → 照用（daemon 写该文件）
+^- `--daemon` 且未指定 `-L` → 自动 `-L /tmp/orzdba.log`（daemon 必须有落盘；由 daemonize 注入子进程 argv）
+^- `--daemon` 且指定 `-L` → 照用（daemon 写该文件）
 - `--also-stdout` 无 `-L` → 报错（`--also-stdout` 依赖 `-L`）
-- `-d` 与 `--also-stdout` 同时 → `-d` 生效（daemon 无终端，stdout 被重定向 /dev/null），`--also-stdout` 实际不输出但可接受
+^- `--daemon` 与 `--also-stdout` 同时 → `-d` 生效（daemon 无终端，stdout 被重定向 /dev/null），`--also-stdout` 实际不输出但可接受
 
 ## 3. 架构与落点
 
 ### 3.1 daemon 化（main.go）
 
-进程解析参数后、打开 sink 前，若 `-d` 则自我 daemon 化：
+进程解析参数后、打开 sink 前，若 `--daemon` 则自我 daemon 化：
 
 1. `os/exec` 以相同参数重新启动自身（去掉 `-d` 防递归），`SysProcAttr.Setsid = true` 脱离会话
 2. 子进程 stdin/stdout/stderr 重定向 `/dev/null`（daemon 不占用终端）
@@ -82,7 +82,7 @@ type Tee struct {
 
 ```
 argv → parseArgs (新增 4 参数 + 校验)
-     → -d ? daemonize（fork+setsid，父进程退出）
+     → --daemon ? daemonize（fork+setsid，父进程退出）
      → 组装 renderer（-noheader / --sep 注入）
      → 组装 sink（-L / --also-stdout / 默认 / daemon 默认日志）
      → 主循环（写 sink，日切轮转复用）
@@ -107,7 +107,7 @@ argv → parseArgs (新增 4 参数 + 校验)
 
 | 风险 | 缓解 |
 |------|------|
-| daemon 化参数透传遗漏 | 用原始 argv 重建命令，仅剔除 `-d` |
+| daemon 化参数透传遗漏 | 用原始 argv 重建命令，仅剔除 `--daemon` |
 | Tee 双写缓冲/顺序 | 直接 io.Writer 串联，无缓冲层 |
 | 分隔符改变破坏列对齐 | 文档说明为预期；默认 `|` 不变 |
 | Windows daemon 不支持 | 明确报错，不静默降级 |

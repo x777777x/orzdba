@@ -221,3 +221,54 @@ func TestParseArgsDMissingValue(t *testing.T) {
 		t.Errorf("error = %q, want -d requires a value", err.Error())
 	}
 }
+
+// ---- ops flags (--daemon / --also-stdout / -noheader / --sep) ----
+
+func TestParseArgsOpsFlags(t *testing.T) {
+	cfg, err := parseArgs([]string{"--daemon", "-L", "/tmp/x.log", "-logfile_by_day", "--also-stdout", "-noheader", "--sep", ","})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.daemon || !cfg.alsoStdout || !cfg.noheader {
+		t.Errorf("ops flags not parsed: daemon=%v alsoStdout=%v noheader=%v", cfg.daemon, cfg.alsoStdout, cfg.noheader)
+	}
+	if cfg.logfile != "/tmp/x.log" || !cfg.logfileByDay {
+		t.Errorf("logfile flags not parsed: logfile=%q byDay=%v", cfg.logfile, cfg.logfileByDay)
+	}
+	if cfg.sep != "," {
+		t.Errorf("sep = %q, want \",\"", cfg.sep)
+	}
+}
+
+func TestParseArgsAlsoStdoutRequiresLogfile(t *testing.T) {
+	// --also-stdout without -L must error (it only makes sense with a file).
+	if _, err := parseArgs([]string{"--also-stdout"}); err == nil {
+		t.Error("--also-stdout without -L should error")
+	}
+	if _, err := parseArgs([]string{"--also-stdout", "-L", "/tmp/x.log"}); err != nil {
+		t.Errorf("--also-stdout with -L should be valid, got %v", err)
+	}
+}
+
+func TestParseArgsSepTab(t *testing.T) {
+	cfg, err := parseArgs([]string{"--sep", `\t`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.sep != `\t` {
+		t.Errorf("sep = %q, want literal `\\t` (converted to tab at render time)", cfg.sep)
+	}
+}
+
+func TestParseArgsDaemonOnly(t *testing.T) {
+	cfg, err := parseArgs([]string{"--daemon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.daemon {
+		t.Error("--daemon should set cfg.daemon")
+	}
+	if cfg.logfile != "" {
+		t.Errorf("--daemon alone should not set a logfile at parse time (main resolves default), got %q", cfg.logfile)
+	}
+}

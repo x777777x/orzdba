@@ -136,6 +136,48 @@ func TestRendererBuildRowColor(t *testing.T) {
 	}
 }
 
+// TestRendererNoHeader verifies -noheader makes Header() return "".
+func TestRendererNoHeader(t *testing.T) {
+	r := NewRenderer(false, 15)
+	r.SetHeaderOff(true)
+	r.AddSys(&stubCol{h1: "AAA ", h2: "a|"})
+	if out := r.Header(); out != "" {
+		t.Errorf("noheader Header() = %q, want \"\"", out)
+	}
+}
+
+// TestRendererCustomSep verifies --sep replaces the group-based separators
+// with a single literal separator on data rows (headers are untouched).
+// The separator appears between collectors (group boundaries); cells within
+// one collector are concatenated directly.
+func TestRendererCustomSep(t *testing.T) {
+	r := NewRenderer(true, 15)
+	r.SetSep(",")
+	// One sys collector (red cell), one mysql collector.
+	r.AddSys(&stubCol{cells: []metric.Cell{{Text: "1", Color: metric.Red}}})
+	r.AddMySQL(&stubCol{cells: []metric.Cell{{Text: "3"}}})
+	out := r.BuildRow()
+	// The red cell keeps its color; the separators are the literal "," (no
+	// color), replacing both the sys "|" and the mysql "|".
+	want := "\x1b[31m1\x1b[0m,3,\n"
+	if out != want {
+		t.Errorf("custom-sep row = %q, want %q", out, want)
+	}
+}
+
+// TestRendererCustomSepTab verifies --sep '\t' becomes a real tab.
+func TestRendererCustomSepTab(t *testing.T) {
+	r := NewRenderer(false, 15)
+	r.SetSep(`\t`)
+	// Two distinct collectors each contribute one cell, so the tab separator
+	// lands between them (cells within one collector have no separator).
+	r.AddSys(&stubCol{cells: []metric.Cell{{Text: "1"}}})
+	r.AddSys(&stubCol{cells: []metric.Cell{{Text: "2"}}})
+	if out := r.BuildRow(); out != "1\t2\t\n" {
+		t.Errorf("tab-sep row = %q, want %q", out, "1\t2\t\n")
+	}
+}
+
 func TestFormatBytesValueRaw(t *testing.T) {
 	// Raw mode (ES-friendly): no suffix, integer bytes, right-aligned to the
 	// wider of the two widths so adjacent raw columns stay separated.

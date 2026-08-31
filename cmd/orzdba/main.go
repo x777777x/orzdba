@@ -54,15 +54,31 @@ func main() {
 		os.Exit(0)
 	}
 
+	// --daemon: re-launch in the background before opening any resource
+	// (sinks, tcprstat, MySQL), so the daemon child starts clean. A daemon
+	// without -L gets the default log path injected into the child's argv
+	// (daemonize handles this; stdout is /dev/null).
+	if cfg.daemon {
+		if err := daemonize(); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0) // parent exits; the daemon child continues
+	}
+
 	// umask 077 so any created files (logs, tcprstat output) are 0600-by-default
 	// (plan §8.4). No-op on Windows (see umask_windows.go).
 	setUmask()
 
 	// color: disabled by -nocolor or -L (plan §6: -L implies nocolor).
-	color := !cfg.nocolor && cfg.logfile == ""
+	// A custom separator or -noheader also implies nocolor: both are machine-
+	// oriented output where ANSI escapes would be noise.
+	color := !cfg.nocolor && cfg.logfile == "" && cfg.sep == "" && !cfg.noheader
 
 	ncpu := detectCPU()
 	renderer := render.NewRenderer(color, cfg.headerPeriod)
+	renderer.SetHeaderOff(cfg.noheader)
+	renderer.SetSep(cfg.sep)
 
 	// Global presentation: --unit (raw numbers by default, human k/m/g when set)
 	// and --full (full column set for host-side modules).
@@ -191,7 +207,7 @@ func main() {
 	// Output sink must be created BEFORE the tcprstat subprocess starts
 	// (P1-4): if the sink fails, we exit without ever spawning tcprstat, so no
 	// orphan child is left behind.
-	sink, err := logsink.New(cfg.logfile, cfg.logfileByDay)
+	sink, err := logsink.New(cfg.logfile, cfg.logfileByDay, cfg.alsoStdout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: cannot open logfile %q: %v\n", cfg.logfile, err)
 		os.Exit(1)
@@ -226,6 +242,9 @@ func main() {
 	// restart we append, so a second title block would duplicate noise) and on
 	// daily-log rotation (new day's file is always fresh).
 	writeTitle := func(w io.Writer) {
+		if cfg.noheader {
+			return // -noheader: suppress the title block entirely
+		}
 		fmt.Fprint(w, buildTitle(color))
 		if status != nil {
 			fmt.Fprint(w, mysqlTitleLine(status, color))

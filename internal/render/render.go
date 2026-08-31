@@ -32,10 +32,12 @@ type Collector interface {
 // half (green '|' separator) — the two separator styles the Perl original
 // uses.
 type Renderer struct {
-	ansi   *ANSI
-	sys    []Collector // includes the time module, which is sys-styled
-	mysql  []Collector
-	period int // header repeat period in data rows
+	ansi      *ANSI
+	sys       []Collector // includes the time module, which is sys-styled
+	mysql     []Collector
+	period    int    // header repeat period in data rows
+	headerOff bool   // -noheader: suppress the title block and periodic headers
+	sepStr    string // --sep custom data-row separator; "" = not set (default "|" per group)
 }
 
 // NewRenderer returns a Renderer. period is the header repeat cadence
@@ -47,6 +49,21 @@ func NewRenderer(color bool, period int) *Renderer {
 		period = 15
 	}
 	return &Renderer{ansi: NewANSI(color), period: period}
+}
+
+// SetHeaderOff enables/disables header output (-noheader). When off, Header()
+// returns "" and the caller skips the title block too.
+func (r *Renderer) SetHeaderOff(off bool) { r.headerOff = off }
+
+// SetSep sets the data-row column separator (--sep). A value of "\\t" is
+// converted to a tab character; any other value is used verbatim. When sep is
+// non-empty it replaces the group-based separators entirely (the user asked
+// for one uniform separator, not the per-group "|" / green "|").
+func (r *Renderer) SetSep(sep string) {
+	if sep == `\t` {
+		sep = "\t"
+	}
+	r.sepStr = sep
 }
 
 // Period returns the normalized header repeat cadence. runLoop uses this
@@ -61,8 +78,12 @@ func (r *Renderer) AddMySQL(c Collector) { r.mysql = append(r.mysql, c) }
 
 // Header renders the two header lines, applying the sys styling (BLUE+BOLD
 // on line1, BLUE+UNDERLINE+BOLD on line2) and, when mysql collectors exist,
-// the mysql styling (ON_BLUE+GREEN / GREEN+UNDERLINE).
+// the mysql styling (ON_BLUE+GREEN / GREEN+UNDERLINE). Returns "" when header
+// output is disabled (-noheader).
 func (r *Renderer) Header() string {
+	if r.headerOff {
+		return ""
+	}
 	var sys1, sys2, my1, my2 strings.Builder
 	for _, c := range r.sys {
 		l1, l2 := c.Headline()
@@ -120,8 +141,14 @@ func (r *Renderer) BuildRow() string {
 	return b.String()
 }
 
-// sep returns the group separator (the '|' column).
+// sep returns the column separator. With no --sep configured, it is the
+// per-group colored '|' (blue for sys, green for mysql). When --sep is set,
+// every column uses that single literal separator (no color) — the user
+// explicitly asked for a uniform separator.
 func (r *Renderer) sep(g metric.Group) string {
+	if r.sepStr != "" {
+		return r.sepStr
+	}
 	switch g {
 	case metric.GroupMySQL:
 		return r.ansi.Colorize("|", metric.Green)
