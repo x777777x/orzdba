@@ -1,6 +1,6 @@
 # orzdba
 
-一个用 Go 重写的 MySQL & Linux 主机实时监控工具，基于淘宝 DBA 团队的 Perl 原版重新实现。
+一个用 Go 重写的 MySQL & Linux/macOS 主机实时监控工具，基于淘宝 DBA 团队的 Perl 原版重新实现。
 
 | | |
 |---|---|
@@ -18,7 +18,8 @@
   - 单元测试：`go test ./...`（含 `-race`）7 个包全部通过
   - 交叉编译：linux/{amd64,arm64,386,arm}、darwin/{amd64,arm64}、windows/{amd64,arm64}、freebsd、openbsd
   - 指标正确性：真实 Linux aarch64 + MySQL 8.0.45 验证 load/cpu/mem/qps
-  - 功能验证（2026-08-31，MySQL 8.0.45 @ 127.0.0.1:3306）：`-mysql`（QPS/TPS/线程/字节，Com_select 差值随负载增长）、`-innodb`（buffer pool 页面解析）、`-sys`（macOS 无 /proc 时按设计退化为零值）
+  - 功能验证（2026-08-31，MySQL 8.0.45 @ 127.0.0.1:3306）：`-mysql`（QPS/TPS/线程/字节，Com_select 差值随负载增长）、`-innodb`（buffer pool 页面解析）
+  - macOS 系统指标（2026-08-31，本机 darwin/arm64）：`-sys` 的 load/cpu/mem/swap/net/disk 全部采集真实值（sysctl/host_statistics/getifaddrs/IOKit）；centos:7 与 ubuntu:22.04（aarch64 容器）Linux 回归 7 包单元测试全绿
 
 ## 指标域
 
@@ -72,7 +73,7 @@ go build -o bin/orzdba ./cmd/orzdba
 ```
 cmd/orzdba/           CLI 入口：参数解析、主循环、标题块
 internal/metric/      共享类型：Cell、Group、Color
-internal/syscol/      /proc 采集器：load、cpu、swap、net、disk
+internal/syscol/      系统采集器：load、cpu、swap、net、disk（Linux /proc + macOS 原生 API，build tag 隔离）
 internal/mycol/       MySQL 采集器：com、hit、innodb_*、threads、bytes、slave、semi
 internal/rtcol/       tcprstat 响应时间采集器（仅 Linux）
 internal/mysqlc/      MySQL 连接与凭证解析（my.cnf、环境变量、CLI）
@@ -124,6 +125,7 @@ testdata/             单元测试用的 /proc 黄金样本
 | M6 | `-slave`（SHOW SLAVE STATUS）、`-semi`（Rpl_semi_sync_*）、`-hit full`（5 列扩展命中率） | ✅ 已完成 |
 | M7 | `-rt` tcprstat 响应时间采集器：子进程生命周期（SIGTERM→200ms→SIGKILL）、崩溃重试一次、0600 日志、端口锁（P1-1） | ✅ 已完成 |
 | M8 | `logsink`：stdout / 单文件（0600，追加不截断）/ 按天轮转文件（标题重打 + 计数器重置） | ✅ 已完成 |
+| M10 | macOS 系统指标：load/cpu/mem/swap/net/disk 原生 API 采集（sysctl/host_statistics/getifaddrs/IOKit），build tag 隔离，Linux 零改动 | ✅ 已完成 |
 | **M9** | **与 Perl 原版的黄金样本行为对齐测试** | **待完成** |
 
 ## 与 Perl 原版的偏差
@@ -132,9 +134,10 @@ testdata/             单元测试用的 /proc 黄金样本
 
 1. **时间列**：打印 `YYYY-MM-DD HH:MM:SS` 而非 `HH:MM:SS`，每行带完整日期（多日日志文件更方便）。
 2. **网络解析**：使用 `strings.Fields` 分割（`recv` = field[1]、`send` = field[9]）；Perl 的 `split(/\s+|:/)` 存在 off-by-one 错误，会读到空字段。
-3. **磁盘设备检查**：当 `/proc/diskstats` 不存在时（非 Linux 开发机），跳过设备存在性检查，工具退化为零值输出；在 Linux 上遇到真正的无效设备名仍会报错。网卡同理（`/proc/net/dev`）。
+3. **磁盘设备检查**：在 Linux 上读取 `/proc/diskstats` 校验设备存在，遇到无效设备名会报错；macOS 通过 IOKit 枚举块设备校验。Windows/freebsd/openbsd 无 `/proc` 且未实现原生采集，跳过检查并退化为零值输出。网卡同理（Linux `/proc/net/dev`，macOS `getifaddrs`）。
 4. **单位**：默认输出**原始数值**（bytes/s、字节、百分比浮点），不带 k/m/g 后缀——便于转存 Elasticsearch 做趋势分析；用 `--unit` 切换为人类可读单位（Perl 兼容格式）。
 5. **日志追加**：`-L` 与 `-logfile_by_day` 使用追加模式（`O_APPEND`），重启不再清空已有日志；标题块仅在文件为空（新文件）时打印，避免重复标题。
+6. **macOS 系统指标（M10 新增）**：macOS 无 `/proc`，改用原生 API 采集——load 用 `sysctl vm.loadavg`（fixpt_t 定点数）、cpu 用 `host_cpu_load_info`、mem 用 `hw.memsize` + `host_statistics64`、swap 用 `vm.swapusage`、net 用 `getifaddrs`、disk 用 IOKit。语义差异：macOS 无 iowait/steal（恒 0）；swap 显示当前用量（`si`=已用、`so`=可用字节）而非 Linux 的 si/so 速率；disk 无队列/服务时间统计，`queue/await/svctm/%util` 恒 0，仅 `r/s w/s rkB/s wkB/s` 有真实值。Linux 行为完全不变。
 
 ## 设计约束
 
