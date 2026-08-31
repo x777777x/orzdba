@@ -90,9 +90,15 @@ func TestANSIColorEmits(t *testing.T) {
 type stubCol struct {
 	h1, h2 string
 	cells  []metric.Cell
+	name   string // optional; defaults to "stub"
 }
 
-func (s *stubCol) Name() string               { return "stub" }
+func (s *stubCol) Name() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "stub"
+}
 func (s *stubCol) Headline() (string, string) { return s.h1, s.h2 }
 func (s *stubCol) Collect() []metric.Cell     { return s.cells }
 
@@ -162,6 +168,32 @@ func TestRendererCustomSep(t *testing.T) {
 	want := "\x1b[31m1\x1b[0m,3,\n"
 	if out != want {
 		t.Errorf("custom-sep row = %q, want %q", out, want)
+	}
+}
+
+// TestRendererCustomSepSplitsMultiValueCell verifies --sep applies to every
+// value inside a cell (e.g. load " 2.25  2.39  2.33" → "2.25,2.39,2.33"),
+// not just the group boundary.
+func TestRendererCustomSepSplitsMultiValueCell(t *testing.T) {
+	r := NewRenderer(false, 15)
+	r.SetSep(",")
+	r.AddSys(&stubCol{cells: []metric.Cell{{Text: " 2.25  2.39  2.33"}}})
+	if out := r.BuildRow(); out != "2.25,2.39,2.33,\n" {
+		t.Errorf("multi-value cell with sep = %q, want %q", out, "2.25,2.39,2.33,\n")
+	}
+}
+
+// TestRendererCustomSepKeepsTimeWhole verifies the time column ("YYYY-MM-DD
+// HH:MM:SS") is NOT split by --sep — it is one timestamp field.
+func TestRendererCustomSepKeepsTimeWhole(t *testing.T) {
+	r := NewRenderer(false, 15)
+	r.SetSep(",")
+	// Name "time" → the timestamp is kept as one field, not split.
+	timeCol := &stubCol{name: "time", cells: []metric.Cell{{Text: "2026-08-31 18:51:04"}}}
+	r.AddSys(timeCol)
+	r.AddSys(&stubCol{cells: []metric.Cell{{Text: "35.5"}}})
+	if out := r.BuildRow(); out != "2026-08-31 18:51:04,35.5,\n" {
+		t.Errorf("time-kept-whole row = %q, want %q", out, "2026-08-31 18:51:04,35.5,\n")
 	}
 }
 

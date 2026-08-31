@@ -113,21 +113,46 @@ func (r *Renderer) Header() string {
 // renders one sampling line. Collectors that return no cells (e.g. CPU when
 // only -d is set) are skipped entirely — no segment, no separator — so they
 // leave no trace in the line.
+//
+// With --sep configured, every numeric value becomes its own column separated
+// by the custom separator: a cell like " 2.25  2.39  2.33" renders as
+// "2.25,2.39,2.33". The time column is kept as a single field (its "YYYY-MM-DD
+// HH:MM:SS" contains a space and represents one timestamp, not two columns).
 func (r *Renderer) BuildRow() string {
 	var b strings.Builder
+	writeCell := func(text string, col metric.Color) {
+		if col == metric.ColorNone {
+			b.WriteString(text)
+			return
+		}
+		b.WriteString(r.ansi.Escape(col))
+		b.WriteString(text)
+		b.WriteString(r.ansi.Reset())
+	}
 	emit := func(c Collector, group metric.Group) {
 		cells := c.Collect()
 		if len(cells) == 0 {
 			return
 		}
-		for _, cell := range cells {
-			if cell.Color == metric.ColorNone {
-				b.WriteString(cell.Text)
+		keepWhole := c.Name() == "time" // timestamps stay a single column
+		for i, cell := range cells {
+			// Between cells of one collector a separator only appears when a
+			// custom --sep is set (the default rendering concatenates cells of
+			// one module; only the group boundary gets the '|').
+			if i > 0 && r.sepStr != "" {
+				b.WriteString(r.sepStr)
+			}
+			if r.sepStr != "" && !keepWhole {
+				parts := strings.Fields(cell.Text)
+				for j, p := range parts {
+					if j > 0 {
+						b.WriteString(r.sepStr)
+					}
+					writeCell(p, cell.Color)
+				}
 				continue
 			}
-			b.WriteString(r.ansi.Escape(cell.Color))
-			b.WriteString(cell.Text)
-			b.WriteString(r.ansi.Reset())
+			writeCell(cell.Text, cell.Color)
 		}
 		b.WriteString(r.sep(group))
 	}

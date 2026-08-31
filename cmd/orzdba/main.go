@@ -528,10 +528,19 @@ Command line options :
    -L,--logfile        Print to Logfile. (implies -nocolor; appends, never truncates)
    -logfile_by_day     One day a logfile, suffix 'yyyy-mm-dd'; valid with -L.
 
+   --daemon            Run in the background (daemonize; Unix only). Without -L
+                       writes to /tmp/orzdba.log (daily-rotated).
+   --also-stdout       With -L, also print rows to stdout (tee).
+   -noheader           Suppress the title block and periodic headers.
+   --sep <s>           Custom column separator for data rows (default '|';
+                       '\t' means a tab; applies to every column).
+
 Sample :
    shell> nohup ./orzdba -lazy -d sda,sdb -C 5 -i 2 -L /tmp/orzdba.log  > /dev/null 2>&1 &
    shell> ./orzdba -m -c -n eth0 -d sda --full -i 1        # full host metrics
    shell> ./orzdba -lazy --unit -i 1                       # human-readable units
+   shell> ./orzdba --daemon -mysql -L /var/log/orzdba.log -logfile_by_day
+   shell> ./orzdba -sys -noheader --sep , -i 1 -C 5        # CSV-like data rows
 ==========================================================================================
 `)
 }
