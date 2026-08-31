@@ -18,8 +18,9 @@
   - 单元测试：`go test ./...`（含 `-race`）7 个包全部通过
   - 交叉编译：linux/{amd64,arm64,386,arm}、darwin/{amd64,arm64}、windows/{amd64,arm64}、freebsd、openbsd
   - 指标正确性：真实 Linux aarch64 + MySQL 8.0.45 验证 load/cpu/mem/qps
-  - 功能验证（2026-08-31，MySQL 8.0.45 @ 127.0.0.1:3306）：`-mysql`（QPS/TPS/线程/字节，Com_select 差值随负载增长）、`-innodb`（buffer pool 页面解析）
-  - macOS 系统指标（2026-08-31，本机 darwin/arm64）：`-sys` 的 load/cpu/mem/swap/net/disk 全部采集真实值（sysctl/host_statistics/getifaddrs/IOKit）；centos:7 与 ubuntu:22.04（aarch64 容器）Linux 回归 7 包单元测试全绿
+  - 功能验证（2026-08-31，MySQL 8.0.45 @ 127.0.0.1:3306）：`-mysql`（QPS/TPS/线程/字节，Com_select 差值随负载增长）、`-innodb`（buffer pool 页面解析）、`-hit full`/`-threads`/`-bytes`/`-slave`/`-semi`/`-lazy` 全部采集正常（slave/semi 因测试库未配主从/半同步输出 0，为预期）
+  - macOS 系统指标（2026-08-31，本机 darwin/arm64）：`-sys` 的 load/cpu/mem/swap/net/disk 全部采集真实值（sysctl/host_statistics/getifaddrs/IOKit）
+  - Linux 发行版验证（2026-08-31，centos:7 与 ubuntu:22.04 aarch64 容器）：系统指标 load/cpu/mem/net/disk（-d vda 真实 IO 值）采集正常，无效设备名正确报错，7 包单元测试全绿
 
 ## 指标域
 
