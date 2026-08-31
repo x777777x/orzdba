@@ -31,22 +31,23 @@ import (
 	"orzdba/internal/syscol"
 )
 
-// version is the build version. Overridden via -ldflags "-X main.version=...".
-//
-// 版本说明（2026-08-31，基线提交 5c2f1e8，首次推送前注释，不改动代码逻辑）：
-//   - 当前代码状态：go-rewrite-plan.md v2.0 里程碑 M0–M8 全部完成，M9（Perl 黄金样本对齐）待完成
-//   - 交叉编译矩阵已验证：linux/{amd64,arm64,386,arm}、darwin/{amd64,arm64}、
-//     windows/{amd64,arm64}、freebsd、openbsd；go test ./... 全量通过
-//   - 已对真实 Linux aarch64 + MySQL 8.0.45 验证 load/cpu/mem/qps 指标，
-//     并在 macOS 开发机上对 MySQL 8.0.45（-mysql/-com/-innodb/-sys）功能验证通过
-//   - 正式发版时再提升该版本号（当前保持 0.1.0-dev，发布版本随 tag 用 ldflags 注入）
-var version = "0.1.0-dev"
+// version is the build version, overridden via -ldflags "-X main.version=...".
+// buildTime and commit carry build metadata injected the same way (see Makefile).
+var (
+	version   = "0.1.0-dev"
+	buildTime = "unknown" // e.g. "2026-08-31T16:00:00Z" (injected by make)
+	commit    = "unknown" // git commit hash (injected by make)
+)
 
 func main() {
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if cfg.version {
+		printVersion()
+		os.Exit(0)
 	}
 	if cfg.help {
 		usage(os.Stdout)
@@ -439,6 +440,15 @@ func splitDevices(s string) []string {
 	return out
 }
 
+// printVersion prints build metadata (version, git commit, build time),
+// populated via make's -ldflags injection. Falls back to defaults when built
+// directly with `go build` (no injection).
+func printVersion() {
+	fmt.Printf("orzdba %s\n", version)
+	fmt.Printf("commit:    %s\n", commit)
+	fmt.Printf("built:     %s\n", buildTime)
+}
+
 // usage prints the custom help (plan §2.4 P2-23: orzdba-go had none). The text
 // mirrors the Perl original's usage block plus the new --long flags.
 func usage(w *os.File) {
@@ -450,6 +460,7 @@ Usage :
 Command line options :
 
    -h,--help           Print Help Info.
+   --version           Print Version Info (version / commit / build time).
    -i,--interval       Time(second) Interval. (default 1)
    -C,--count          Times.
    -t,--time           Print The Current Time.

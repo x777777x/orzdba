@@ -41,8 +41,17 @@
 
 ```bash
 make build
-# 或直接编译
+# 或直接编译（不注入编译信息，--version 显示默认值）
 go build -o bin/orzdba ./cmd/orzdba
+```
+
+`make build` 会自动注入**版本号**（git tag/提交号）、**Git 提交号**、**编译时间**（UTC），可用 `orzdba --version` 查看：
+
+```
+$ orzdba --version
+orzdba e89276b-dirty
+commit:    e89276b
+built:     2026-08-31T09:14:41Z
 ```
 
 ## 快速开始

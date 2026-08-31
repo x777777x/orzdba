@@ -10,7 +10,8 @@ import (
 
 // config holds the parsed, composite-expanded flags.
 type config struct {
-	help bool
+	help    bool
+	version bool
 
 	interval     int
 	count        int
@@ -77,6 +78,7 @@ func parseArgs(argv []string) (*config, error) {
 	c := &config{interval: 1, port: 3306, headerPeriod: 15, mysqlTimeout: time.Second, tpsMode: "iud", host: "127.0.0.1", mysqlDefaultsGrp: "client"}
 
 	fs.BoolVarP(&c.help, "help", "h", false, "")
+	fs.BoolVar(&c.version, "version", false, "")
 	fs.IntVarP(&c.interval, "interval", "i", 1, "")
 	fs.IntVarP(&c.count, "count", "C", 0, "")
 	fs.BoolVarP(&c.time, "time", "t", false, "")
