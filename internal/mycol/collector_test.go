@@ -161,6 +161,21 @@ func TestHitFullColumns(t *testing.T) {
 	}
 }
 
+// TestHitFullFirstTick (D4) verifies -hit full emits zeros on the first tick
+// (no previous sample) instead of NaN-fallback "100.00" values.
+func TestHitFullFirstTick(t *testing.T) {
+	s := NewStatusSource(nil, 1, time.Second) // tick 0, no prev
+	cells := NewHit(s, true).Collect()
+	if len(cells) != 7 {
+		t.Fatalf("first-tick full hit produced %d cells, want 7", len(cells))
+	}
+	for i, c := range cells {
+		if c.Text == "100.00" || c.Text == " 100.00" || c.Text == "  100.00" || c.Text == "100" {
+			t.Errorf("cell %d = %q, want zeros on first tick", i, c.Text)
+		}
+	}
+}
+
 // ---- threads + thread cache hit ----
 
 func TestThreadCacheHit(t *testing.T) {
@@ -447,5 +462,49 @@ func TestRateFloorsAtInterval(t *testing.T) {
 	s := newTestSource(map[string]int64{"Com_select": 300}, map[string]int64{"Com_select": 100}, nil)
 	if r := s.Rate("Com_select"); r != 200 {
 		t.Errorf("Rate with unset lastOK = %v, want 200", r)
+	}
+}
+
+// TestRateUsesRealFetchWindow (D1) verifies the denominator is the real
+// wall-clock window between the two successful fetches that produced the
+// delta, not the fixed interval. It replicates the actual Fetch() sequencing
+// (prevFetch = lastOK before lastOK = now) which the older TestRateUsesElapsedAfterGap
+// (which only sets lastOK directly) did not exercise.
+func TestRateUsesRealFetchWindow(t *testing.T) {
+	s := NewStatusSource(nil, 1, time.Second)
+	s.cur = map[string]int64{"Com_select": 100}
+	s.prev = map[string]int64{"Com_select": 50}
+	s.tick = 3
+	s.ok = true
+	// Previous successful fetch was 2s ago, the one before that 4s ago.
+	s.lastOK = time.Now().Add(-2 * time.Second)
+	s.prevFetch = time.Now().Add(-4 * time.Second)
+	// Second successful fetch: Fetch() shifts prevFetch <- lastOK, lastOK <- now.
+	s.prev = s.cur
+	s.cur = map[string]int64{"Com_select": 500}
+	s.tick++
+	s.ok = true
+	s.prevFetch = s.lastOK
+	s.lastOK = time.Now()
+	// delta = 400 over ~2s → ~200/s (not 400/s as the broken code produced).
+	if r := s.Rate("Com_select"); r > 220 || r < 180 {
+		t.Errorf("Rate after real 2s window = %v, want ~200", r)
+	}
+}
+
+// TestDeltaCounterReset (N1) verifies cumulative counters that went backwards
+// (server restart / counter wrap) read as 0 rather than a negative delta.
+func TestDeltaCounterReset(t *testing.T) {
+	s := newTestSource(map[string]int64{"Com_select": 10}, map[string]int64{"Com_select": 500}, nil)
+	if d := s.Delta("Com_select"); d != 0 {
+		t.Errorf("Delta after counter reset = %d, want 0", d)
+	}
+	if r := s.Rate("Com_select"); r != 0 {
+		t.Errorf("Rate after counter reset = %v, want 0", r)
+	}
+	// Normal increasing delta is unaffected.
+	s2 := newTestSource(map[string]int64{"Com_select": 500}, map[string]int64{"Com_select": 10}, nil)
+	if d := s2.Delta("Com_select"); d != 490 {
+		t.Errorf("Delta (normal) = %d, want 490", d)
 	}
 }

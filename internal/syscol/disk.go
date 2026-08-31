@@ -22,14 +22,11 @@ const HZ = 100
 //
 // Devices are given as a comma-separated list (-d sda,sdb); each device gets
 // its own column group. full=true (--full) emits the extended iostat fields.
-// unit controls byte presentation: Raw = bytes/s (ES-friendly), Human = KiB/s
-// (Perl-compatible display).
 type Disk struct {
 	cpu     *CPU
 	devices []string
 	ncpu    int
 	full    bool
-	unit    metric.UnitMode
 	prev    map[string]diskStat
 }
 
@@ -42,10 +39,11 @@ type diskStat struct {
 
 // NewDisk returns a disk collector for the given device list. cpu provides the
 // jiffies diffs used by deltams (may be nil only if neither -c nor -d is set,
-// which never happens when a Disk exists). full enables extended columns; unit
-// selects byte presentation.
-func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, unit metric.UnitMode) *Disk {
-	return &Disk{cpu: cpu, devices: devices, ncpu: ncpu, full: full, unit: unit,
+// which never happens when a Disk exists). full enables extended columns.
+// unit is retained in the signature for API compatibility but unused by the
+// disk renderer (rkB/s is always KiB/s — D5 removed the dead field).
+func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, _ metric.UnitMode) *Disk {
+	return &Disk{cpu: cpu, devices: devices, ncpu: ncpu, full: full,
 		prev: make(map[string]diskStat, len(devices))}
 }
 

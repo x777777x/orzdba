@@ -31,10 +31,10 @@ func (c *Slave) Collect() []metric.Cell {
 // Pure (testable): readMLP/execMLP/chk WHITE, SecBM green (>300 red), NULL
 // Seconds_Behind_Master → 0 (treated as caught up).
 func formatSlave(m map[string]string) []metric.Cell {
-	readMLP := parseI64(m["Read_Master_Log_Pos"])
-	execMLP := parseI64(m["Exec_Master_Log_Pos"])
+	readMLP := parseInt64(m["Read_Master_Log_Pos"])
+	execMLP := parseInt64(m["Exec_Master_Log_Pos"])
 	chk := readMLP - execMLP
-	secBM := parseI64(m["Seconds_Behind_Master"])
+	secBM := parseInt64(m["Seconds_Behind_Master"])
 	col := metric.Green
 	if secBM > 300 {
 		col = metric.Red
@@ -47,11 +47,4 @@ func formatSlave(m map[string]string) []metric.Cell {
 
 func zeroSlave() []metric.Cell {
 	return []metric.Cell{{Text: fmt.Sprintf("%11d%12d%8d%8d", 0, 0, 0, 0), Color: metric.White}}
-}
-
-// parseI64 parses a string int, 0 on failure (NULL/empty/"NULL" → 0).
-func parseI64(s string) int64 {
-	var n int64
-	fmt.Sscanf(s, "%d", &n)
-	return n
 }

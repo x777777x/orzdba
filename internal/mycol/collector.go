@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,11 +30,16 @@ type StatusSource struct {
 	tick     int
 	timeout  time.Duration
 	ok       bool // false when the last Fetch failed (degrade to zeros)
-	// lastOK is the wall-clock time of the last successful Fetch. It is the
-	// denominator for rate computation (P1-6): after a transient failure the
-	// delta spans MORE than one interval, and dividing by the fixed interval
-	// would inflate the next tick's rates ~2x.
-	lastOK time.Time
+	// lastOK is the wall-clock time of the last successful Fetch.
+	// prevFetch is the wall-clock time of the previous successful Fetch.
+	// The rate denominator is the real elapsed window (lastOK - prevFetch),
+	// so after a transient failure the delta spanning several intervals is
+	// divided by the true elapsed time instead of the fixed interval (P1-6).
+	// (Fix D1: lastOK alone can't be used with time.Since, because Fetch sets
+	// it to "now" immediately before Rate runs, so time.Since ≈ 0 and the
+	// elapsed branch never fired — inflating rates ~2x after a gap.)
+	lastOK    time.Time
+	prevFetch time.Time
 }
 
 // statusVars is the superset of variables the -mysql collectors read. Keeping
@@ -112,6 +118,7 @@ func (s *StatusSource) Fetch() {
 	s.curRaw = nextRaw
 	s.tick++
 	s.ok = true
+	s.prevFetch = s.lastOK
 	s.lastOK = time.Now()
 }
 
@@ -128,30 +135,53 @@ func (s *StatusSource) Cur(name string) int64 {
 }
 
 // Delta returns cur - prev for a variable (0 on first tick or failure).
+//
+// N1: cumulative counters only ever grow. If cur < prev the server restarted
+// (or a counter wrapped/rotated) since the previous sample; the delta is
+// meaningless and reading 0 avoids a garbage negative "rate" on the recovery
+// tick after a MySQL restart.
 func (s *StatusSource) Delta(name string) int64 {
 	if !s.HasPrev() {
 		return 0
 	}
-	return s.cur[name] - s.prev[name]
+	d := s.cur[name] - s.prev[name]
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 // Rate returns Delta / elapsed (per-second). P1-6: the denominator is the
-// real wall-clock time since the last successful fetch (floored at the
-// configured interval). After a transient fetch failure the delta spans
-// several intervals; dividing by the fixed interval would overstate the rate.
-// To avoid an in-progress-tick divide-by-near-zero, floor at interval and cap
-// at 10x interval (a server that was down that long should read as a plateau,
-// not a spike).
+// real wall-clock window between the two successful fetches that produced the
+// delta — (lastOK - prevFetch) — floored at the configured interval. After a
+// transient fetch failure the delta spans several intervals; dividing by the
+// fixed interval would overstate the rate. (Fix D1: previously lastOK was set
+// by Fetch immediately before Rate ran, so time.Since(lastOK) ≈ 0 and the
+// elapsed branch never fired; the denominator was always the fixed interval.)
+//
+// To keep behavior when prevFetch is unset (e.g. unit tests that prime a
+// source directly), fall back to the same elapsed-vs-interval logic using
+// lastOK when prevFetch is zero, and to the fixed interval when both are zero.
 func (s *StatusSource) Rate(name string) float64 {
 	delta := float64(s.Delta(name))
 	denom := s.interval
 	if !s.lastOK.IsZero() {
-		elapsed := time.Since(s.lastOK).Seconds()
+		elapsed := s.elapsedSinceLastFetch()
 		if elapsed > denom {
 			denom = elapsed
 		}
 	}
 	return delta / denom
+}
+
+// elapsedSinceLastFetch returns the wall-clock seconds spanned by the current
+// delta: lastOK - prevFetch when prevFetch is set, else now - lastOK (for
+// unit-test sources primed without prevFetch).
+func (s *StatusSource) elapsedSinceLastFetch() float64 {
+	if !s.prevFetch.IsZero() {
+		return s.lastOK.Sub(s.prevFetch).Seconds()
+	}
+	return time.Since(s.lastOK).Seconds()
 }
 
 // CurRaw returns the current raw (unparsed) value of a status variable — for
@@ -277,10 +307,10 @@ func inList(vars []string) string {
 }
 
 // parseInt64 parses a MySQL status value, 0 on failure (non-numeric like "ON"
-// degrade to 0 — plan §2.4 P2-15).
+// degrade to 0 — plan §2.4 P2-15). Uses strconv.ParseInt instead of
+// fmt.Sscanf (R1: ~17x faster; Sscanf is reflection-based).
 func parseInt64(s string) int64 {
-	var n int64
-	_, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &n)
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 	if err != nil {
 		return 0
 	}

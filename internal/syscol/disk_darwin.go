@@ -96,9 +96,7 @@ import (
 // Like the Linux disk, prev is zero-initialized so the first tick yields
 // since-boot averages.
 type Disk struct {
-	cpu     *CPU
 	devices []string
-	ncpu    int
 	full    bool
 	prev    map[string]diskStat
 }
@@ -109,12 +107,12 @@ type diskStat struct {
 	rdOps, wrOps     uint64
 }
 
-// NewDisk returns a disk collector for the given device list. cpu provides the
-// jiffies diffs used by deltams (macOS keeps the same signature for interface
-// parity; deltams is unused since %util stays 0). full enables extended
-// columns; unit selects byte presentation (kept for signature parity).
-func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, _ metric.UnitMode) *Disk {
-	return &Disk{cpu: cpu, devices: devices, ncpu: ncpu, full: full,
+// NewDisk returns a disk collector for the given device list. cpu/ncpu are
+// retained in the signature for API compatibility with the Linux version but
+// unused on macOS (D5: removed the dead fields — %util stays 0 here). full
+// enables extended columns; unit is likewise unused.
+func NewDisk(_ *CPU, devices []string, _ int, full bool, _ metric.UnitMode) *Disk {
+	return &Disk{devices: devices, full: full,
 		prev: make(map[string]diskStat, len(devices))}
 }
 

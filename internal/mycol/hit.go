@@ -60,6 +60,20 @@ func (h *Hit) collectOne() []metric.Cell {
 
 // collectFull is the orzdba-go 5-column extended hit (7 fields).
 func (h *Hit) collectFull() []metric.Cell {
+	// D4: first tick has no previous sample — emit zeros like collectOne and
+	// the other collectors, instead of NaN-fallback "100.00" values (which
+	// would misleadingly read as perfect hit rates on the very first row).
+	if !h.src.HasPrev() {
+		return []metric.Cell{
+			{Text: fmt.Sprintf("%6.2f", 0.0), Color: metric.White},
+			{Text: fmt.Sprintf("%7.2f", 0.0), Color: metric.White},
+			{Text: fmt.Sprintf("%7.2f", 0.0), Color: metric.White},
+			{Text: fmt.Sprintf("%7.2f", 0.0), Color: metric.White},
+			{Text: fmt.Sprintf("%7.2f", 0.0), Color: metric.White},
+			{Text: fmt.Sprintf("%8d", 0), Color: metric.White},
+			{Text: fmt.Sprintf("%7.2f", 0.0), Color: metric.White},
+		}
+	}
 	keyReadReq := h.src.Rate("Key_read_requests")
 	keyRead := h.src.Rate("Key_reads")
 	keyWriteReq := h.src.Rate("Key_write_requests")
@@ -98,18 +112,19 @@ func (h *Hit) collectFull() []metric.Cell {
 	}
 }
 
-// pct clamps a ratio to a 0–100 percentage; NaN/Inf (0/0) → 100.
+// pct clamps a ratio to a 0–100 percentage. NaN/Inf (0/0) and ratios > 1
+// (negative hit, e.g. after a counter reset) saturate to 100; ratios < 0
+// clamp to 0 (D2: removed the redundant if-else that returned 100 on both
+// branches; behavior is unchanged).
 func pct(ratio float64) float64 {
-	if ratio != ratio || ratio > 1 { // NaN or >1
-		if ratio > 1 {
-			return 100
-		}
+	switch {
+	case ratio > 1 || ratio != ratio: // >1 or NaN (0/0)
 		return 100
-	}
-	if ratio < 0 {
+	case ratio < 0:
 		return 0
+	default:
+		return ratio * 100
 	}
-	return ratio * 100
 }
 
 func hitColor(hit float64) metric.Color {
