@@ -33,6 +33,14 @@ import (
 )
 
 // version is the build version. Overridden via -ldflags "-X main.version=...".
+//
+// 版本说明（2026-08-31，基线提交 5c2f1e8，首次推送前注释，不改动代码逻辑）：
+//   - 当前代码状态：go-rewrite-plan.md v2.0 里程碑 M0–M8 全部完成，M9（Perl 黄金样本对齐）待完成
+//   - 交叉编译矩阵已验证：linux/{amd64,arm64,386,arm}、darwin/{amd64,arm64}、
+//     windows/{amd64,arm64}、freebsd、openbsd；go test ./... 全量通过
+//   - 已对真实 Linux aarch64 + MySQL 8.0.45 验证 load/cpu/mem/qps 指标，
+//     并在 macOS 开发机上对 MySQL 8.0.45（-mysql/-com/-innodb/-sys）功能验证通过
+//   - 正式发版时再提升该版本号（当前保持 0.1.0-dev，发布版本随 tag 用 ldflags 注入）
 var version = "0.1.0-dev"
 
 func main() {

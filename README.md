@@ -9,6 +9,17 @@
 | **路线图** | [`go-rewrite-plan.md`](go-rewrite-plan.md)（v2.0 里程碑） |
 | **仓库** | [x777777x/orzdba](https://github.com/x777777x/orzdba) |
 
+## 版本说明
+
+- **当前版本**：`0.1.0-dev`（`cmd/orzdba/main.go` 中 `version` 变量，正式发版时通过 `-ldflags "-X main.version=..."` 注入发布版本）
+- **代码基线**：2026-08-31，提交 `5c2f1e8`（首次推送到远端仓库前的本地基线）
+- **里程碑状态**：v2.0 计划 M0–M8 已完成，M9（与 Perl 原版黄金样本对齐）待完成
+- **已验证**：
+  - 单元测试：`go test ./...`（含 `-race`）7 个包全部通过
+  - 交叉编译：linux/{amd64,arm64,386,arm}、darwin/{amd64,arm64}、windows/{amd64,arm64}、freebsd、openbsd
+  - 指标正确性：真实 Linux aarch64 + MySQL 8.0.45 验证 load/cpu/mem/qps
+  - 功能验证（2026-08-31，MySQL 8.0.45 @ 127.0.0.1:3306）：`-mysql`（QPS/TPS/线程/字节，Com_select 差值随负载增长）、`-innodb`（buffer pool 页面解析）、`-sys`（macOS 无 /proc 时按设计退化为零值）
+
 ## 指标域
 
 | 域 | 指标 | 触发参数 |
