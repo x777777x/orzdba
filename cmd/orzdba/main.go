@@ -602,19 +602,38 @@ func buildTitle(color bool) string {
 	return b.String()
 }
 
-// primaryIP returns the first non-loopback IPv4 address, or "?" if none.
+// primaryIP returns the first non-loopback IPv4 address on an up, non-loopback
+// interface, or "?" if none.
+//
+// It uses net.Interfaces() (interface list) rather than net.InterfaceAddrs()
+// so that auxiliary IPs bound to the loopback interface (e.g. `ip addr add
+// 10.99.0.1 dev lo`) are excluded — those are loopback-bound virtual IPs, not
+// the machine's routable address. IsLoopback() alone is not enough: it only
+// matches 127.0.0.0/8, not extra addresses added to lo.
 func primaryIP() string {
-	addrs, err := net.InterfaceAddrs()
+	ifs, err := net.Interfaces()
 	if err != nil {
 		return "?"
 	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() {
+	for _, ifc := range ifs {
+		if ifc.Flags&net.FlagUp == 0 {
+			continue // interface is down — its addresses are not usable
+		}
+		if ifc.Flags&net.FlagLoopback != 0 {
+			continue // skip the loopback interface entirely (incl. aux addrs)
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
 			continue
 		}
-		if v4 := ipnet.IP.To4(); v4 != nil {
-			return v4.String()
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.IsLoopback() {
+				continue
+			}
+			if v4 := ipnet.IP.To4(); v4 != nil {
+				return v4.String()
+			}
 		}
 	}
 	return "?"
