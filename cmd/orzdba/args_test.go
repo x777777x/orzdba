@@ -272,3 +272,64 @@ func TestParseArgsDaemonOnly(t *testing.T) {
 		t.Errorf("--daemon alone should not set a logfile at parse time (main resolves default), got %q", cfg.logfile)
 	}
 }
+
+// ---- -ip flag and remote-MySQL vs sys mutual exclusion ----
+
+func TestParseArgsIPFlag(t *testing.T) {
+	cfg, err := parseArgs([]string{"-ip", "-sys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ip {
+		t.Error("-ip should set cfg.ip")
+	}
+}
+
+func TestRemoteMySQLRejectsLazy(t *testing.T) {
+	// -lazy expands to sys + mysql; with a remote -H it must be rejected.
+	_, err := parseArgs([]string{"-H", "192.168.99.99", "-lazy"})
+	if err == nil {
+		t.Fatal("remote -H + -lazy should error")
+	}
+	if !strings.Contains(err.Error(), "remote MySQL") {
+		t.Errorf("error = %q, want remote-MySQL hint", err.Error())
+	}
+}
+
+func TestRemoteMySQLRejectsExplicitSys(t *testing.T) {
+	for _, argv := range [][]string{
+		{"-H", "192.168.99.99", "-l"},
+		{"-H", "192.168.99.99", "-c"},
+		{"-H", "192.168.99.99", "-m"},
+		{"-H", "192.168.99.99", "-d", "sda"},
+		{"-H", "192.168.99.99", "-n", "eth0"},
+	} {
+		// These alone don't enable mysql, so no rejection.
+		if _, err := parseArgs(argv); err != nil {
+			t.Errorf("%v alone should be valid (no mysql), got %v", argv, err)
+		}
+		// With -com (mysql leaf) they must be rejected.
+		full := append([]string{"-com"}, argv[1:]...)
+		full = append([]string{argv[0]}, full...)
+		if _, err := parseArgs(full); err == nil {
+			t.Errorf("%v with -com should be rejected (remote mysql + sys)", full)
+		}
+	}
+}
+
+func TestLocalMySQLAllowsSys(t *testing.T) {
+	// Local -H (loopback) + sys/mysql mix must be allowed.
+	for _, h := range []string{"127.0.0.1", "localhost"} {
+		if _, err := parseArgs([]string{"-H", h, "-lazy"}); err != nil {
+			t.Errorf("local -H %s + -lazy should be valid, got %v", h, err)
+		}
+	}
+}
+
+func TestRemoteMySQLAllowsMysqlOnly(t *testing.T) {
+	// Remote -H + mysql-only (no sys) must be allowed (reaches the connect
+	// stage later; parse is fine).
+	if _, err := parseArgs([]string{"-H", "192.168.99.99", "-mysql"}); err != nil {
+		t.Errorf("remote -H + -mysql should parse, got %v", err)
+	}
+}

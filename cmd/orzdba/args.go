@@ -35,6 +35,7 @@ type config struct {
 	alsoStdout bool   // --also-stdout: with -L, also write rows to stdout (tee)
 	noheader   bool   // -noheader: suppress the title block and periodic headers
 	sep        string // --sep: custom column separator for data rows (default "|")
+	ip         bool   // -ip: output an IP column (the monitored host)
 
 	// Composite flags (tracked so we only expand them when explicitly passed).
 	sys    bool
@@ -143,6 +144,7 @@ func parseArgs(argv []string) (*config, error) {
 	fs.BoolVar(&c.alsoStdout, "also-stdout", false, "")
 	fs.BoolVar(&c.noheader, "noheader", false, "")
 	fs.StringVar(&c.sep, "sep", "", "") // "" means the default "|"
+	fs.BoolVar(&c.ip, "ip", false, "")
 
 	if err := fs.Parse(argv); err != nil {
 		return nil, friendlyParseErr(err)
@@ -176,6 +178,13 @@ func parseArgs(argv []string) (*config, error) {
 	}
 	if c.alsoStdout && c.logfile == "" {
 		return nil, fmt.Errorf("--also-stdout requires -L/--logfile (it only makes sense when writing to a file too)")
+	}
+	// Remote MySQL + local system metrics → misleading (the sys columns are
+	// collected from THIS host, not from the remote one). Reject the combo.
+	if c.mysql && !isLocalHost(c.host) {
+		if c.load || c.cpu || c.swap || c.mem || c.disk != "" || c.net != "" || c.sys {
+			return nil, fmt.Errorf("-H %s is a remote MySQL; local system metrics (-l/-c/-s/-m/-d/-n/-sys/-lazy) would be misleading. Use them only with a local -H", c.host)
+		}
 	}
 	if pos := fs.Args(); len(pos) > 0 {
 		return nil, fmt.Errorf("unexpected positional arguments: %v (orzdba takes only flags)", pos)
@@ -285,6 +294,7 @@ var longFlagNames = map[string]bool{
 	"daemon":               true,
 	"also-stdout":          true,
 	"sep":                  true,
+	"ip":                   true,
 	"logfile_by_day":       true,
 	"mysql_user":           true,
 	"mysql_pass":           true,

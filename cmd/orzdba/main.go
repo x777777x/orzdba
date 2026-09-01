@@ -99,6 +99,9 @@ func main() {
 	if cfg.time {
 		renderer.AddSys(&timeCol{})
 	}
+	if cfg.ip {
+		renderer.AddSys(&ipCol{ip: monitoredIP(cfg)})
+	}
 	if cfg.load {
 		renderer.AddSys(syscol.NewLoad(ncpu))
 	}
@@ -434,6 +437,21 @@ func (*timeCol) Collect() []metric.Cell {
 	}
 }
 
+// ipCol emits the IP of the monitored host (-ip). For a local MySQL the value
+// is this host's primary (non-loopback) IP; for a remote MySQL it is the -H
+// address. Shown right after the time column.
+type ipCol struct{ ip string }
+
+func (*ipCol) Name() string { return "ip" }
+func (*ipCol) Headline() (string, string) {
+	return strings.Repeat("-", 16) + " ", "              ip|"
+}
+func (c *ipCol) Collect() []metric.Cell {
+	return []metric.Cell{
+		{Text: c.ip, Color: metric.Yellow},
+	}
+}
+
 // validateDevFlag rejects device-name values that look like a flag (start with
 // '-'). This catches the common mistake of writing `-d -n eth0` (forgetting
 // the device name) — pflag would otherwise silently consume `-n` as -d's
@@ -534,6 +552,8 @@ Command line options :
    -noheader           Suppress the title block and periodic headers.
    --sep <s>           Custom column separator for data rows (default '|';
                        '\t' means a tab; applies to every column).
+   -ip                 Output an IP column (the monitored host: local machine
+                       IP for a local MySQL, else the -H address).
 
 Sample :
    shell> nohup ./orzdba -lazy -d sda,sdb -C 5 -i 2 -L /tmp/orzdba.log  > /dev/null 2>&1 &
@@ -597,4 +617,50 @@ func primaryIP() string {
 		}
 	}
 	return "?"
+}
+
+// monitoredIP returns the IP of the monitored host for the -ip column:
+//   - remote MySQL (-H not local) → the -H address
+//   - local (no MySQL, or -H local) → this host's primary IP, falling back to
+//     127.0.0.1 when no non-loopback address exists
+func monitoredIP(cfg *config) string {
+	if cfg.mysql && !isLocalHost(cfg.host) {
+		return cfg.host
+	}
+	if ip := primaryIP(); ip != "?" {
+		return ip
+	}
+	return "127.0.0.1"
+}
+
+// isLocalHost reports whether host refers to this machine (the source of the
+// local sys metrics). Loose check by design: loopback/empty → local; any of
+// this host's interface IPs → local; anything else (remote IP or hostname)
+// → remote. Hostnames are NOT resolved (DNS could point a name at this host
+// but the machine's identity is ambiguous then).
+func isLocalHost(host string) bool {
+	if host == "" || host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false // a hostname → treat as remote
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipnet.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
