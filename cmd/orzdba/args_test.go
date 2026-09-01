@@ -276,12 +276,29 @@ func TestParseArgsDaemonOnly(t *testing.T) {
 // ---- -ip flag and remote-MySQL vs sys mutual exclusion ----
 
 func TestParseArgsIPFlag(t *testing.T) {
+	// bare -ip → "auto"
 	cfg, err := parseArgs([]string{"-ip", "-sys"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ip {
-		t.Error("-ip should set cfg.ip")
+	if cfg.ip != "auto" {
+		t.Errorf("-ip bare = %q, want \"auto\"", cfg.ip)
+	}
+	// -ip <addr> → explicit value
+	cfg, err = parseArgs([]string{"-ip", "10.0.0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ip != "10.0.0.5" {
+		t.Errorf("-ip 10.0.0.5 = %q, want \"10.0.0.5\"", cfg.ip)
+	}
+	// no -ip → "" (no IP column)
+	cfg, err = parseArgs([]string{"-sys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ip != "" {
+		t.Errorf("no -ip = %q, want \"\"", cfg.ip)
 	}
 }
 

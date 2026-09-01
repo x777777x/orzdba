@@ -38,19 +38,28 @@ func TestIsLocalHostOwnInterface(t *testing.T) {
 
 func TestMonitoredIP(t *testing.T) {
 	// Local (loopback) → own primary IP.
-	cfg := &config{host: "127.0.0.1", mysql: true}
+	cfg := &config{host: "127.0.0.1", mysql: true, ip: "auto"}
 	if got := monitoredIP(cfg); got == "" || got == "?" {
 		t.Errorf("monitoredIP(local) = %q, want a real IP", got)
 	}
 	// Remote mysql → the -H address.
-	cfg = &config{host: "192.168.99.99", mysql: true}
+	cfg = &config{host: "192.168.99.99", mysql: true, ip: "auto"}
 	if got := monitoredIP(cfg); got != "192.168.99.99" {
 		t.Errorf("monitoredIP(remote) = %q, want 192.168.99.99", got)
 	}
 	// No mysql → own primary IP.
-	cfg = &config{host: "192.168.99.99", mysql: false}
+	cfg = &config{host: "192.168.99.99", mysql: false, ip: "auto"}
 	if got := monitoredIP(cfg); got == "192.168.99.99" {
 		t.Errorf("monitoredIP(no mysql) = %q, want own IP (not the -H value)", got)
+	}
+	// Explicit -ip <addr> → used verbatim regardless of local/remote.
+	cfg = &config{host: "192.168.99.99", mysql: true, ip: "10.0.0.5"}
+	if got := monitoredIP(cfg); got != "10.0.0.5" {
+		t.Errorf("monitoredIP(explicit) = %q, want 10.0.0.5", got)
+	}
+	cfg = &config{host: "127.0.0.1", mysql: true, ip: "10.0.0.9"}
+	if got := monitoredIP(cfg); got != "10.0.0.9" {
+		t.Errorf("monitoredIP(explicit local) = %q, want 10.0.0.9", got)
 	}
 }
 

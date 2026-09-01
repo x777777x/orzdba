@@ -35,7 +35,7 @@ type config struct {
 	alsoStdout bool   // --also-stdout: with -L, also write rows to stdout (tee)
 	noheader   bool   // -noheader: suppress the title block and periodic headers
 	sep        string // --sep: custom column separator for data rows (default "|")
-	ip         bool   // -ip: output an IP column (the monitored host)
+	ip         string // -ip: "auto" (bare) picks the primary IP; an explicit value is used as-is; "" = no IP column
 
 	// Composite flags (tracked so we only expand them when explicitly passed).
 	sys    bool
@@ -144,7 +144,11 @@ func parseArgs(argv []string) (*config, error) {
 	fs.BoolVar(&c.alsoStdout, "also-stdout", false, "")
 	fs.BoolVar(&c.noheader, "noheader", false, "")
 	fs.StringVar(&c.sep, "sep", "", "") // "" means the default "|"
-	fs.BoolVar(&c.ip, "ip", false, "")
+	// -ip takes an optional value: bare "-ip" → "auto" (pick the primary IP);
+	// "-ip <addr>" → use that address verbatim. NoOptDefVal lets pflag accept
+	// a bare -ip (mirrors the -hit flag).
+	fs.StringVar(&c.ip, "ip", "", "")
+	fs.Lookup("ip").NoOptDefVal = "auto"
 
 	if err := fs.Parse(argv); err != nil {
 		return nil, friendlyParseErr(err)
@@ -265,6 +269,14 @@ func normalizeArgs(args []string) []string {
 		if (a == "-hit" || a == "--hit") && i+1 < len(args) && args[i+1] == "full" {
 			out = append(out, "--hit=full")
 			i++ // consume "full"
+			continue
+		}
+		// -ip <addr> / --ip <addr> → --ip=<addr>. A value is a non-flag token
+		// (does not start with '-'); a bare -ip (next is another flag or end)
+		// stays bare so pflag's NoOptDefVal yields "auto".
+		if (a == "-ip" || a == "--ip") && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			out = append(out, "--ip="+args[i+1])
+			i++ // consume the value
 			continue
 		}
 		if len(a) > 2 && a[0] == '-' && a[1] != '-' && longFlagNames[a[1:]] {

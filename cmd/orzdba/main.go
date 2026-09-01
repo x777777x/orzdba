@@ -99,7 +99,7 @@ func main() {
 	if cfg.time {
 		renderer.AddSys(&timeCol{})
 	}
-	if cfg.ip {
+	if cfg.ip != "" {
 		renderer.AddSys(&ipCol{ip: monitoredIP(cfg)})
 	}
 	if cfg.load {
@@ -552,8 +552,9 @@ Command line options :
    -noheader           Suppress the title block and periodic headers.
    --sep <s>           Custom column separator for data rows (default '|';
                        '\t' means a tab; applies to every column).
-   -ip                 Output an IP column (the monitored host: local machine
-                       IP for a local MySQL, else the -H address).
+   -ip[=<addr>]        Output an IP column. Bare -ip: monitored host (local
+                       machine IP for a local MySQL, else the -H address).
+                       -ip <addr> uses that address verbatim.
 
 Sample :
    shell> nohup ./orzdba -lazy -d sda,sdb -C 5 -i 2 -L /tmp/orzdba.log  > /dev/null 2>&1 &
@@ -620,10 +621,15 @@ func primaryIP() string {
 }
 
 // monitoredIP returns the IP of the monitored host for the -ip column:
-//   - remote MySQL (-H not local) → the -H address
-//   - local (no MySQL, or -H local) → this host's primary IP, falling back to
-//     127.0.0.1 when no non-loopback address exists
+//   - explicit -ip <addr> → that address verbatim
+//   - bare -ip ("auto"):
+//       remote MySQL (-H not local) → the -H address
+//       local (no MySQL, or -H local) → this host's primary IP, falling back
+//         to 127.0.0.1 when no non-loopback address exists
 func monitoredIP(cfg *config) string {
+	if cfg.ip != "" && cfg.ip != "auto" {
+		return cfg.ip // user explicitly chose the IP column value
+	}
 	if cfg.mysql && !isLocalHost(cfg.host) {
 		return cfg.host
 	}
