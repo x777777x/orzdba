@@ -131,6 +131,9 @@ func loadCNF(explicit, group string) *CNFSource {
 		if w := CheckFileMode(explicit); w != "" {
 			fmt.Fprintln(os.Stderr, w)
 		}
+		if src.IncludeNote != "" {
+			fmt.Fprintf(os.Stderr, "warn: %s: %s — !include directives are not followed; credentials defined there are ignored\n", explicit, src.IncludeNote)
+		}
 		return src
 	}
 	merged := &CNFSource{}
@@ -148,6 +151,9 @@ func loadCNF(explicit, group string) *CNFSource {
 		}
 		if w := CheckFileMode(p); w != "" {
 			fmt.Fprintln(os.Stderr, w)
+		}
+		if src.IncludeNote != "" {
+			fmt.Fprintf(os.Stderr, "warn: %s: %s — !include directives are not followed; credentials defined there are ignored\n", p, src.IncludeNote)
 		}
 		if !src.Found {
 			continue // this file has no [group] section with credential keys

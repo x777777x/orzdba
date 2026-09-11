@@ -78,6 +78,28 @@ func TestParseSkipsCommentsAndBoolKeys(t *testing.T) {
 	}
 }
 
+func TestParseIncludeNote(t *testing.T) {
+	// !include directives are recognized but not followed; the parser must
+	// surface the first one so callers can warn instead of silently dropping
+	// credentials defined in included files (P1-7).
+	dir := t.TempDir()
+	p := filepath.Join(dir, "inc.cnf")
+	content := "!includedir /etc/my.cnf.d\n\n[client]\nuser=x\npassword=y\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := ParseMySQLDefaults(p, "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.IncludeNote != "!includedir /etc/my.cnf.d" {
+		t.Errorf("IncludeNote = %q, want the first ! directive", src.IncludeNote)
+	}
+	if !src.Found || src.User != "x" || src.Password != "y" {
+		t.Errorf("credentials after !include mis-parsed: %+v", src)
+	}
+}
+
 func TestCheckFileMode(t *testing.T) {
 	dir := t.TempDir()
 	strict := filepath.Join(dir, "strict.cnf")

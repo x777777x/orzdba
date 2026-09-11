@@ -25,6 +25,11 @@ type CNFSource struct {
 	Socket   string
 	Port     int
 	Found    bool
+	// IncludeNote is the first !include/!includedir directive seen in the
+	// file. Such directives are recognized but not followed (plan §8.2), so
+	// callers surface this note instead of silently dropping credentials
+	// defined in included files (P1-7).
+	IncludeNote string
 }
 
 // ParseMySQLDefaults parses path and returns the key=value pairs found under
@@ -54,7 +59,13 @@ func parseCNF(r io.Reader, group string, src *CNFSource) error {
 			continue
 		}
 		if strings.HasPrefix(line, "!") {
-			continue // !include / !includedir — not yet followed
+			// Recognized but not followed (plan §8.2). Record the first
+			// directive so callers can warn — credentials in included files
+			// are otherwise silently lost.
+			if src.IncludeNote == "" {
+				src.IncludeNote = line
+			}
+			continue
 		}
 		if line[0] == '[' && strings.HasSuffix(line, "]") {
 			section = strings.TrimSpace(line[1 : len(line)-1])
