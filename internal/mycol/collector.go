@@ -340,11 +340,13 @@ func (s *StatusSource) ShowVariables(names []string) (map[string]string, error) 
 	return out, nil
 }
 
-// isSystemDB reports whether name is one of the system databases the Perl
-// original filters out of the title.
+// isSystemDB reports whether name is one of the system databases the title
+// filters out. The Perl original only knew information_schema/mysql/test;
+// performance_schema and sys are MySQL 8 standard system schemas — listing
+// them as user databases in the title is noise.
 func isSystemDB(name string) bool {
 	switch strings.ToLower(name) {
-	case "information_schema", "mysql", "test":
+	case "information_schema", "mysql", "test", "performance_schema", "sys":
 		return true
 	}
 	return false

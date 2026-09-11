@@ -192,8 +192,9 @@ func TestDatabasesFiltering(t *testing.T) {
 	)
 	s := NewStatusSource(mockDB(), 1, time.Second)
 	got := s.Databases()
-	// Excludes information_schema, mysql, test (Perl grep -iwvE filter).
-	want := []string{"performance_schema", "sbtest", "sys"}
+	// Excludes information_schema, mysql, test (Perl grep -iwvE filter) plus
+	// the MySQL 8 system schemas performance_schema and sys.
+	want := []string{"sbtest"}
 	if len(got) != len(want) {
 		t.Fatalf("Databases = %v, want %v", got, want)
 	}
@@ -330,13 +331,13 @@ func TestParseInt64(t *testing.T) {
 }
 
 func TestIsSystemDB(t *testing.T) {
-	system := []string{"information_schema", "mysql", "test", "MySQL", "TEST"}
+	system := []string{"information_schema", "mysql", "test", "MySQL", "TEST", "performance_schema", "PERFORMANCE_SCHEMA", "sys", "SYS"}
 	for _, d := range system {
 		if !isSystemDB(d) {
 			t.Errorf("isSystemDB(%q) = false, want true", d)
 		}
 	}
-	nonSystem := []string{"sbtest", "performance_schema", "sys", "mydb"}
+	nonSystem := []string{"sbtest", "mydb", "syslog"} // "syslog" contains sys but is a user DB
 	for _, d := range nonSystem {
 		if isSystemDB(d) {
 			t.Errorf("isSystemDB(%q) = true, want false", d)
