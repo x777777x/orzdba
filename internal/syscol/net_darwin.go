@@ -62,8 +62,8 @@ func (n *Net) Collect() []metric.Cell {
 		n.notFirst = true
 		return netZeros(n.full)
 	}
-	dRecv := float64(s.rxBytes) - float64(n.recv)
-	dSend := float64(s.txBytes) - float64(n.send)
+	dRecv := clamp0(float64(s.rxBytes) - float64(n.recv))
+	dSend := clamp0(float64(s.txBytes) - float64(n.send))
 	n.recv = s.rxBytes
 	n.send = s.txBytes
 	recvRate := dRecv / n.interval
@@ -75,7 +75,7 @@ func (n *Net) Collect() []metric.Cell {
 			{Text: " " + render.FormatBytesValue(sendRate, n.unit, 6, 7), Raw: sendRate, Color: netColor(sendRate)},
 		}
 	}
-	rate := func(cur, prev uint64) float64 { return float64(cur) - float64(prev) }
+	rate := func(cur, prev uint64) float64 { return clamp0(float64(cur) - float64(prev)) }
 	cells := []metric.Cell{
 		{Text: " " + render.FormatBytesValue(recvRate, n.unit, 7, 7), Raw: recvRate, Color: netColor(recvRate)},
 		{Text: fmt.Sprintf(" %7.0f", rate(s.rxPackets, n.prev[0])), Raw: rate(s.rxPackets, n.prev[0]), Color: metric.White},

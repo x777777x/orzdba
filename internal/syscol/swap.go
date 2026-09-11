@@ -57,8 +57,8 @@ func (s *Swap) consume(data []byte) []metric.Cell {
 			{Text: fmt.Sprintf(" %4d", 0), Color: metric.White},
 		}
 	}
-	dIn := int64(pswpin) - int64(s.pswpin)
-	dOut := int64(pswpout) - int64(s.pswpout)
+	dIn := clamp0(int64(pswpin) - int64(s.pswpin))
+	dOut := clamp0(int64(pswpout) - int64(s.pswpout))
 	s.pswpin = pswpin
 	s.pswpout = pswpout
 	return []metric.Cell{

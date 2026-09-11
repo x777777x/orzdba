@@ -9,6 +9,7 @@ package syscol
 
 import (
 	"bufio"
+	"cmp"
 	"io"
 	"os"
 	"strconv"
@@ -75,6 +76,19 @@ func parseFloat(s string) float64 {
 	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil {
 		return 0
+	}
+	return v
+}
+
+// clamp0 floors a counter delta at 0. Cumulative counters (bytes, packets,
+// ticks) only yield meaningful deltas while they grow; when one shrinks —
+// interface down/up, container veth recreate, disk detach/reattach — the raw
+// delta is a meaningless negative "rate". Mirrors mycol StatusSource.Delta's
+// N1 guard on the system side.
+func clamp0[T cmp.Ordered](v T) T {
+	var zero T
+	if v < zero {
+		return zero
 	}
 	return v
 }

@@ -200,10 +200,10 @@ func (d *Disk) readStats() map[string]diskStat {
 // deviceCells computes the iostat fields for one device. On macOS only
 // r/s, w/s, rkB/s, wkB/s carry real values; queue/await/svctm/%iow/%util are 0.
 func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
-	rdBytes := int64(cur.rdBytes) - int64(prev.rdBytes)
-	wrBytes := int64(cur.wrBytes) - int64(prev.wrBytes)
-	rdOps := int64(cur.rdOps) - int64(prev.rdOps)
-	wrOps := int64(cur.wrOps) - int64(prev.wrOps)
+	rdBytes := clamp0(int64(cur.rdBytes) - int64(prev.rdBytes))
+	wrBytes := clamp0(int64(cur.wrBytes) - int64(prev.wrBytes))
+	rdOps := clamp0(int64(cur.rdOps) - int64(prev.rdOps))
+	wrOps := clamp0(int64(cur.wrOps) - int64(prev.wrOps))
 
 	if !d.full {
 		return []metric.Cell{

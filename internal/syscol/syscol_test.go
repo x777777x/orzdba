@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"orzdba/internal/metric"
@@ -318,5 +320,69 @@ func TestNetFullSecondTick(t *testing.T) {
 	// txbytes rate = 1048576 (cell 4)
 	if cells[4].Raw != 1048576 {
 		t.Errorf("full net txbytes Raw = %v, want 1048576", cells[4].Raw)
+	}
+}
+
+// ---- counter-reset guard (clamp0): a shrank counter must yield 0, not -N ----
+
+// netDevLine builds a /proc/net/dev-style line: "name:" plus 16 counters
+// (parseNetDevFull keeps the colon attached to the name and splits on
+// whitespace, so the counters land at fixed indices regardless of name length).
+func netDevLine(dev string, counters [16]uint64) []byte {
+	fields := make([]string, 17)
+	fields[0] = dev + ":"
+	for i, v := range counters {
+		fields[i+1] = strconv.FormatUint(v, 10)
+	}
+	return []byte(strings.Join(fields, " ") + "\n")
+}
+
+func TestNetCounterResetClampsToZero(t *testing.T) {
+	// Interface down/up (or veth recreate) zeroes rx/tx between ticks: the
+	// raw delta is negative and must clamp to 0, not print -N.
+	var high [16]uint64
+	high[0], high[8] = 1048576, 2097152 // rxBytes, txBytes
+	n := NewNet("eth0", 1, false, metric.UnitRaw)
+	n.consume(netDevLine("eth0", high))
+	cells := n.consume(netDevLine("eth0", [16]uint64{}))
+	for i, c := range cells {
+		if c.Raw != 0 {
+			t.Errorf("reset cell %d Raw = %v, want 0", i, c.Raw)
+		}
+		if strings.Contains(c.Text, "-") {
+			t.Errorf("reset cell %d text = %q, want no negative value", i, c.Text)
+		}
+	}
+}
+
+func TestSwapCounterResetClampsToZero(t *testing.T) {
+	s := NewSwap(1)
+	s.consume([]byte("pswpin 50\npswpout 30\n"))
+	cells := s.consume([]byte("pswpin 0\npswpout 0\n"))
+	if cells[0].Text != "    0" || cells[0].Color != metric.White {
+		t.Errorf("reset si = %q/%v, want \"    0\"/White", cells[0].Text, cells[0].Color)
+	}
+	if cells[1].Text != "    0" || cells[1].Color != metric.White {
+		t.Errorf("reset so = %q/%v, want \"    0\"/White", cells[1].Text, cells[1].Color)
+	}
+}
+
+func TestDiskCounterResetClampsToZero(t *testing.T) {
+	// Device removed and re-added: every diskstats counter for sda resets to
+	// 0; all iostat columns must clamp to 0 (busy included), never negative.
+	cpu := NewCPU(2, false, false)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
+	cpu.consume(mustRead(t, "stat_tick1.txt"))
+	d.consume(mustRead(t, "diskstats_tick1.txt"))
+	cpu.consume(mustRead(t, "stat_tick2.txt"))
+	reset := []byte("   8       0 sda 0 0 0 0 0 0 0 0 0 0 0 0\n")
+	cells := d.consume(reset)
+	for i, c := range cells {
+		if c.Raw != 0 {
+			t.Errorf("reset cell %d Raw = %v, want 0", i, c.Raw)
+		}
+		if strings.Contains(c.Text, "-") {
+			t.Errorf("reset cell %d text = %q, want no negative value", i, c.Text)
+		}
 	}
 }

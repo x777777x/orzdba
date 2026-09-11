@@ -111,14 +111,14 @@ func (d *Disk) consume(data []byte) []metric.Cell {
 
 // deviceCells computes the iostat fields for one device and returns its cells.
 func (d *Disk) deviceCells(dev string, cur, prev diskStat, deltams float64) []metric.Cell {
-	rdIOS := int64(cur.rdIOS) - int64(prev.rdIOS)
-	wrIOS := int64(cur.wrIOS) - int64(prev.wrIOS)
-	rdSectors := int64(cur.rdSectors) - int64(prev.rdSectors)
-	wrSectors := int64(cur.wrSectors) - int64(prev.wrSectors)
-	rdTicks := int64(cur.rdTicks) - int64(prev.rdTicks)
-	wrTicks := int64(cur.wrTicks) - int64(prev.wrTicks)
-	ticks := int64(cur.totTicks) - int64(prev.totTicks)
-	aveq := int64(cur.aveq) - int64(prev.aveq)
+	rdIOS := clamp0(int64(cur.rdIOS) - int64(prev.rdIOS))
+	wrIOS := clamp0(int64(cur.wrIOS) - int64(prev.wrIOS))
+	rdSectors := clamp0(int64(cur.rdSectors) - int64(prev.rdSectors))
+	wrSectors := clamp0(int64(cur.wrSectors) - int64(prev.wrSectors))
+	rdTicks := clamp0(int64(cur.rdTicks) - int64(prev.rdTicks))
+	wrTicks := clamp0(int64(cur.wrTicks) - int64(prev.wrTicks))
+	ticks := clamp0(int64(cur.totTicks) - int64(prev.totTicks))
+	aveq := clamp0(int64(cur.aveq) - int64(prev.aveq))
 
 	nIOS := rdIOS + wrIOS
 	nTicks := rdTicks + wrTicks
