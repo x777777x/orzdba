@@ -29,20 +29,6 @@ func (s *File) Fresh() bool { return s.fresh }
 func (s *File) Write(p []byte) (int, error) { return s.f.Write(p) }
 func (s *File) Close() error                { return s.f.Close() }
 
-// Reopen is used by DailyFile; kept here to share the openFile helper.
-func (s *File) reopen() error {
-	if err := s.f.Close(); err != nil {
-		return err
-	}
-	f, fresh, err := openFile(s.path)
-	if err != nil {
-		return err
-	}
-	s.f = f
-	s.fresh = fresh
-	return nil
-}
-
 // Compile-time interface checks.
 var (
 	_ Sink      = (*Stdout)(nil)
