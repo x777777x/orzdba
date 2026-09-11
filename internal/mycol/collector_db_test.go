@@ -79,9 +79,14 @@ func TestFetchErrorDegrades(t *testing.T) {
 }
 
 // ---- SlaveStatus: column scanning + NULL + no-rows + error ----
+//
+// The mock has no SQL parser, so pre-8.4 servers are simulated by registering
+// an error for "SHOW REPLICA STATUS" (SlaveStatus probes it first).
 
 func TestSlaveStatusReplica(t *testing.T) {
 	resetMock()
+	// Pre-8.4 server: the new statement is a syntax error, the old one works.
+	mockDrv.errByQuery["SHOW REPLICA STATUS"] = errors.New("syntax error")
 	mockDrv.rowsByQuery["SHOW SLAVE STATUS"] = newRows(
 		[]string{"Master_Host", "Read_Master_Log_Pos", "Exec_Master_Log_Pos", "Seconds_Behind_Master"},
 		[]string{"10.0.0.2", "1000", "800", "10"},
@@ -94,10 +99,50 @@ func TestSlaveStatusReplica(t *testing.T) {
 	if m["Read_Master_Log_Pos"] != "1000" || m["Exec_Master_Log_Pos"] != "800" || m["Seconds_Behind_Master"] != "10" {
 		t.Errorf("slave map mis-scanned: %+v", m)
 	}
+	if s.slaveStmt != "SHOW SLAVE STATUS" {
+		t.Errorf("working statement not cached: %q", s.slaveStmt)
+	}
+}
+
+func TestSlaveStatusReplicaStatementOn840(t *testing.T) {
+	// MySQL 8.4+ removed SHOW SLAVE STATUS: the new statement succeeds and
+	// its success is what gets cached.
+	resetMock()
+	mockDrv.rowsByQuery["SHOW REPLICA STATUS"] = newRows(
+		[]string{"Source_Host", "Read_Source_Log_Pos", "Exec_Source_Log_Pos", "Seconds_Behind_Source"},
+		[]string{"10.0.0.2", "1000", "800", "10"},
+	)
+	s := NewStatusSource(mockDB(), 1, time.Second)
+	m, ok := s.SlaveStatus()
+	if !ok {
+		t.Fatal("replica row present, ok should be true")
+	}
+	if s.slaveStmt != "SHOW REPLICA STATUS" {
+		t.Errorf("8.4 statement not cached: %q", s.slaveStmt)
+	}
+	if m["Read_Source_Log_Pos"] != "1000" {
+		t.Errorf("replica-statement map mis-scanned: %+v", m)
+	}
+}
+
+func TestSlaveStatusFailedProbeNotCached(t *testing.T) {
+	// Both statements failing (e.g. connection down) must NOT cache anything:
+	// the next tick retries the probe.
+	resetMock()
+	mockDrv.errByQuery["SHOW REPLICA STATUS"] = errors.New("connection refused")
+	mockDrv.errByQuery["SHOW SLAVE STATUS"] = errors.New("connection refused")
+	s := NewStatusSource(mockDB(), 1, time.Second)
+	if _, ok := s.SlaveStatus(); ok {
+		t.Error("both statements failing should return ok=false")
+	}
+	if s.slaveStmt != "" {
+		t.Errorf("failed probe cached %q, want empty", s.slaveStmt)
+	}
 }
 
 func TestSlaveStatusNullColumn(t *testing.T) {
 	resetMock()
+	mockDrv.errByQuery["SHOW REPLICA STATUS"] = errors.New("syntax error")
 	// Seconds_Behind_Master is NULL when replication is stopped — the driver
 	// returns nil; the scan into NullString must mark it invalid (not crash).
 	mockDrv.rowsByQuery["SHOW SLAVE STATUS"] = newRowsWithNull(
@@ -119,6 +164,7 @@ func TestSlaveStatusNullColumn(t *testing.T) {
 
 func TestSlaveStatusNoRows(t *testing.T) {
 	resetMock()
+	mockDrv.errByQuery["SHOW REPLICA STATUS"] = errors.New("syntax error")
 	mockDrv.rowsByQuery["SHOW SLAVE STATUS"] = newRows([]string{"Master_Host"}) // empty
 	s := NewStatusSource(mockDB(), 1, time.Second)
 	if _, ok := s.SlaveStatus(); ok {
@@ -128,6 +174,7 @@ func TestSlaveStatusNoRows(t *testing.T) {
 
 func TestSlaveStatusError(t *testing.T) {
 	resetMock()
+	mockDrv.errByQuery["SHOW REPLICA STATUS"] = errors.New("access denied")
 	mockDrv.errByQuery["SHOW SLAVE STATUS"] = errors.New("access denied")
 	s := NewStatusSource(mockDB(), 1, time.Second)
 	if _, ok := s.SlaveStatus(); ok {

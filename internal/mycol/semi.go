@@ -20,14 +20,16 @@ func (*Semi) Headline() (string, string) {
 }
 
 func (c *Semi) Collect() []metric.Cell {
-	status := c.src.CurRaw("Rpl_semi_sync_master_status") // "ON"/"OFF"/""
+	// MySQL 8.0.26 renamed the master-side semisync vars to source; read
+	// whichever spelling the server exposes (both on 8.0.26-8.0.x).
+	status := c.src.CurRawFallback("Rpl_semi_sync_master_status", "Rpl_semi_sync_source_status")
 	on := 1
 	if !strings.EqualFold(status, "ON") {
 		on = 0
 	}
-	yesTx := c.src.Cur("Rpl_semi_sync_master_yes_tx")
-	noTx := c.src.Cur("Rpl_semi_sync_master_no_tx")
-	noTimes := c.src.Cur("Rpl_semi_sync_master_no_timeouts")
+	yesTx := c.src.CurFallback("Rpl_semi_sync_master_yes_tx", "Rpl_semi_sync_source_yes_tx")
+	noTx := c.src.CurFallback("Rpl_semi_sync_master_no_tx", "Rpl_semi_sync_source_no_tx")
+	noTimes := c.src.CurFallback("Rpl_semi_sync_master_no_timeouts", "Rpl_semi_sync_source_no_timeouts")
 	col := metric.Green
 	if noTx > 0 || noTimes > 0 {
 		col = metric.Red

@@ -354,6 +354,20 @@ func TestFormatSlaveLagRed(t *testing.T) {
 	}
 }
 
+func TestFormatSlaveRenamedColumns(t *testing.T) {
+	// MySQL 8.0.22+ SHOW REPLICA STATUS spells the columns Source/Replica;
+	// formatSlave must read them when the old names are absent.
+	m := map[string]string{"Read_Source_Log_Pos": "1000", "Exec_Source_Log_Pos": "800", "Seconds_Behind_Source": "10"}
+	cells := formatSlave(m)
+	want := fmt.Sprintf("%11d%12d%8d", 1000, 800, 200)
+	if cells[0].Text != want {
+		t.Errorf("renamed read/exec/chk = %q, want %q", cells[0].Text, want)
+	}
+	if cells[1].Text != "      10" || cells[1].Color != metric.Green {
+		t.Errorf("renamed SecBM = %q/%v, want \"      10\"/Green", cells[1].Text, cells[1].Color)
+	}
+}
+
 func TestFormatSlaveNullLag(t *testing.T) {
 	// Seconds_Behind_Master is NULL when replication is stopped/unknown.
 	m := map[string]string{"Read_Master_Log_Pos": "100", "Exec_Master_Log_Pos": "100", "Seconds_Behind_Master": "NULL"}
@@ -396,6 +410,17 @@ func TestSemiNotLoaded(t *testing.T) {
 	cells := NewSemi(newTestSource(map[string]int64{}, nil, map[string]string{})).Collect()
 	if cells[0].Text != "     0       0      0        0" || cells[0].Color != metric.Green {
 		t.Errorf("semi not-loaded = %q/%v, want zeros/Green", cells[0].Text, cells[0].Color)
+	}
+}
+
+func TestSemiSourceNamedVars(t *testing.T) {
+	// MySQL 8.0.26 renamed the semisync vars master→source; when only the new
+	// names exist (8.4+) the collector must still read them.
+	cur := map[string]int64{"Rpl_semi_sync_source_yes_tx": 100}
+	raw := map[string]string{"Rpl_semi_sync_source_status": "ON"}
+	cells := NewSemi(newTestSource(cur, nil, raw)).Collect()
+	if cells[0].Text != "     1     100      0        0" || cells[0].Color != metric.Green {
+		t.Errorf("semi source-vars = %q/%v, want Green ON row", cells[0].Text, cells[0].Color)
 	}
 }
 

@@ -40,6 +40,12 @@ type StatusSource struct {
 	// elapsed branch never fired — inflating rates ~2x after a gap.)
 	lastOK    time.Time
 	prevFetch time.Time
+	// slaveStmt caches which replication-status SHOW statement this server
+	// accepts: MySQL 8.4+ removed SHOW SLAVE STATUS (8.0.22 deprecated it in
+	// favor of SHOW REPLICA STATUS), older servers only know the old one.
+	// Set after the first successful query; a failed fetch leaves it unset so
+	// the probe retries next tick.
+	slaveStmt string
 }
 
 // statusVars is the superset of variables the -mysql collectors read. Keeping
@@ -77,6 +83,10 @@ var statusVars = []string{
 	// semi-sync replication (absent → 0 / "" when plugin not loaded)
 	"Rpl_semi_sync_master_status", "Rpl_semi_sync_master_yes_tx",
 	"Rpl_semi_sync_master_no_tx", "Rpl_semi_sync_master_no_timeouts",
+	// MySQL 8.0.26 renamed the master-side semisync vars to source; servers
+	// 8.0.26-8.0.x expose both spellings, 8.4+ only the new ones.
+	"Rpl_semi_sync_source_status", "Rpl_semi_sync_source_yes_tx",
+	"Rpl_semi_sync_source_no_tx", "Rpl_semi_sync_source_no_timeouts",
 }
 
 // NewStatusSource returns a StatusSource. interval is the sampling interval
@@ -193,20 +203,63 @@ func (s *StatusSource) CurRaw(name string) string {
 	return s.curRaw[name]
 }
 
-// SlaveStatus runs SHOW SLAVE STATUS and returns the first row as a
-// column→value map. Returns ok=false when there are no rows (this server is
-// not a replica). Column names vary across MySQL versions, so we read them
-// dynamically.
+// CurFallback returns the value of a status variable, falling back to its
+// renamed MySQL 8.0.26+ spelling (master→source) when the old name is absent.
+// 0 when neither exists or the last Fetch failed. Servers 8.0.26-8.0.x expose
+// both spellings, so the old name wins while it is present.
+func (s *StatusSource) CurFallback(old, renamed string) int64 {
+	if !s.ok {
+		return 0
+	}
+	if v, ok := s.cur[old]; ok {
+		return v
+	}
+	return s.cur[renamed]
+}
+
+// CurRawFallback is CurFallback for string-valued variables ("ON"/"OFF").
+func (s *StatusSource) CurRawFallback(old, renamed string) string {
+	if !s.ok {
+		return ""
+	}
+	if v, ok := s.curRaw[old]; ok {
+		return v
+	}
+	return s.curRaw[renamed]
+}
+
+// SlaveStatus runs SHOW REPLICA STATUS with a fallback to SHOW SLAVE STATUS
+// and returns the first row as a column→value map. ok=false when there are no
+// rows (this server is not a replica) or both statements fail.
+//
+// MySQL 8.4+ removed SHOW SLAVE STATUS (deprecated since 8.0.22 in favor of
+// SHOW REPLICA STATUS); 5.7 / early 8.0 / MariaDB only know the old spelling.
+// Probing both on every tick would send one guaranteed-failing query per tick
+// on about half the world's servers, so the first SUCCESSFUL statement is
+// cached (see s.slaveStmt) — a transient connection error is not cached and
+// retries the probe next tick. Column names vary across versions, so rows are
+// read dynamically.
 func (s *StatusSource) SlaveStatus() (map[string]string, bool) {
 	if s.db == nil {
 		return nil, false
 	}
+	stmt := s.slaveStmt
+	if stmt == "" {
+		stmt = "SHOW REPLICA STATUS"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
-	rows, err := s.db.QueryContext(ctx, "SHOW SLAVE STATUS")
+	rows, err := s.db.QueryContext(ctx, stmt)
+	if err != nil && stmt == "SHOW REPLICA STATUS" {
+		// Pre-8.4 server (or the connection just dropped): try the old
+		// spelling before giving up.
+		stmt = "SHOW SLAVE STATUS"
+		rows, err = s.db.QueryContext(ctx, stmt)
+	}
 	if err != nil {
 		return nil, false
 	}
+	s.slaveStmt = stmt
 	defer rows.Close()
 	cols, err := rows.Columns()
 	if err != nil {
