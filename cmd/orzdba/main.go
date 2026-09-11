@@ -531,8 +531,10 @@ func (*ipCol) Headline() (string, string) {
 	return strings.Repeat("-", 16) + " ", "              ip|"
 }
 func (c *ipCol) Collect() []metric.Cell {
+	// Left-padded to the headline's 16-char field: unpadded IPs (8-15 chars)
+	// shifted every later column of the row out of alignment with the header.
 	return []metric.Cell{
-		{Text: c.ip, Color: metric.Yellow},
+		{Text: fmt.Sprintf("%-16s", c.ip), Color: metric.Yellow},
 	}
 }
 
