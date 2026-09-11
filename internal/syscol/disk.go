@@ -186,12 +186,6 @@ func (d *Disk) deltams() float64 {
 	return 1000.0 * (d.cpu.LastUserDiff + d.cpu.LastSysDiff + d.cpu.LastIdleDiff + d.cpu.LastIowDiff) / float64(d.ncpu) / HZ
 }
 
-func diskBytesColor(v float64) metric.Color {
-	if v > 1024 {
-		return metric.Red
-	}
-	return metric.White
-}
 func diskWaitColor(v float64) metric.Color {
 	if v > 5 {
 		return metric.Red
@@ -209,21 +203,6 @@ func diskBusyColor(v float64) metric.Color {
 		return metric.Red
 	}
 	return metric.Green
-}
-
-// zeroRow returns a zero-valued row matching the current column layout.
-func (d *Disk) zeroRow() []metric.Cell {
-	n := 7
-	if d.full {
-		n = 8
-	}
-	cells := make([]metric.Cell, 0, len(d.devices)*n)
-	for range d.devices {
-		for i := 0; i < n; i++ {
-			cells = append(cells, metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White})
-		}
-	}
-	return cells
 }
 
 // parseDiskStats parses every device line in /proc/diskstats into a map keyed

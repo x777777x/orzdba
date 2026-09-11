@@ -143,37 +143,6 @@ func (n *Net) consume(data []byte) []metric.Cell {
 	return cells
 }
 
-// netZeros returns zero-valued cells matching the current column layout.
-func netZeros(full bool) []metric.Cell {
-	if full {
-		z := make([]metric.Cell, 8)
-		for i := range z {
-			z[i] = metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White}
-		}
-		return z
-	}
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%7s", "0"), Color: metric.White},
-		{Text: fmt.Sprintf("%7s", "0"), Color: metric.White},
-	}
-}
-
-// netColor: rate>1MiB/s RED else WHITE (Perl).
-func netColor(rate float64) metric.Color {
-	if rate/1024/1024 > 1 {
-		return metric.Red
-	}
-	return metric.White
-}
-
-// netErrColor: any errors/drops in the window → RED, else WHITE.
-func netErrColor(d float64) metric.Color {
-	if d > 0 {
-		return metric.Red
-	}
-	return metric.White
-}
-
 // parseNetDev finds the device line in /proc/net/dev and returns its recv
 // (field[1]) and send (field[9]) byte counters. Fields are split on
 // whitespace; the colon stays attached to the device name, so the byte

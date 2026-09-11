@@ -137,37 +137,6 @@ func (n *Net) readStats() netStat {
 	return s
 }
 
-// netZeros returns zero-valued cells matching the current column layout.
-func netZeros(full bool) []metric.Cell {
-	if full {
-		z := make([]metric.Cell, 8)
-		for i := range z {
-			z[i] = metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White}
-		}
-		return z
-	}
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%7s", "0"), Color: metric.White},
-		{Text: fmt.Sprintf("%7s", "0"), Color: metric.White},
-	}
-}
-
-// netColor: rate>1MiB/s RED else WHITE (Perl).
-func netColor(rate float64) metric.Color {
-	if rate/1024/1024 > 1 {
-		return metric.Red
-	}
-	return metric.White
-}
-
-// netErrColor: any errors/drops in the window → RED, else WHITE.
-func netErrColor(d float64) metric.Color {
-	if d > 0 {
-		return metric.Red
-	}
-	return metric.White
-}
-
 // InterfaceExists reports whether the named interface is present via
 // getifaddrs. Used by the platform net-device check.
 func InterfaceExists(dev string) bool {

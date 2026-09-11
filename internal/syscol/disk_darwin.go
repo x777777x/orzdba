@@ -170,8 +170,17 @@ func (d *Disk) Collect() []metric.Cell {
 	return cells
 }
 
-// readStats enumerates whole disks and returns a map of BSD name → counters.
-func (d *Disk) readStats() map[string]diskStat {
+// diskSample is one whole disk's BSD name plus its IOKit counters.
+type diskSample struct {
+	name string
+	stat diskStat
+}
+
+// diskSamples enumerates whole disks via the shared C helper: it allocates the
+// transfer buffers, calls orzdba_disk_stats once, and unpacks the parallel
+// arrays. Empty names (missing/unparseable "BSD Name") are skipped — the
+// buffers are zero-initialized, so unfilled slots read as "".
+func diskSamples() []diskSample {
 	const max = 64
 	const stride = 64
 	names := make([]C.char, max*stride)
@@ -187,18 +196,28 @@ func (d *Disk) readStats() map[string]diskStat {
 		(*C.longlong)(unsafe.Pointer(&wrO[0])),
 		C.int(max),
 	)
-	out := make(map[string]diskStat, int(n))
+	out := make([]diskSample, 0, int(n))
 	for i := 0; i < int(n); i++ {
 		name := C.GoString((*C.char)(unsafe.Pointer(&names[i*stride])))
 		if name == "" {
 			continue
 		}
-		out[name] = diskStat{
+		out = append(out, diskSample{name: name, stat: diskStat{
 			rdBytes: uint64(rdB[i]),
 			wrBytes: uint64(wrB[i]),
 			rdOps:   uint64(rdO[i]),
 			wrOps:   uint64(wrO[i]),
-		}
+		}})
+	}
+	return out
+}
+
+// readStats enumerates whole disks and returns a map of BSD name → counters.
+func (d *Disk) readStats() map[string]diskStat {
+	samples := diskSamples()
+	out := make(map[string]diskStat, len(samples))
+	for _, s := range samples {
+		out[s.name] = s.stat
 	}
 	return out
 }
@@ -234,52 +253,13 @@ func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
 	}
 }
 
-func diskBytesColor(v float64) metric.Color {
-	if v > 1024 {
-		return metric.Red
-	}
-	return metric.White
-}
-
 // DarwinDiskNames returns the BSD names of all whole disks on this macOS
 // host (e.g. "disk0", "disk1"), used by the platform disk-device check.
 func DarwinDiskNames() []string {
-	const max = 64
-	const stride = 64
-	names := make([]C.char, max*stride)
-	rdB := make([]C.longlong, max)
-	wrB := make([]C.longlong, max)
-	rdO := make([]C.longlong, max)
-	wrO := make([]C.longlong, max)
-	n := C.orzdba_disk_stats(
-		(*C.char)(unsafe.Pointer(&names[0])), C.int(stride),
-		(*C.longlong)(unsafe.Pointer(&rdB[0])),
-		(*C.longlong)(unsafe.Pointer(&wrB[0])),
-		(*C.longlong)(unsafe.Pointer(&rdO[0])),
-		(*C.longlong)(unsafe.Pointer(&wrO[0])),
-		C.int(max),
-	)
-	out := make([]string, 0, int(n))
-	for i := 0; i < int(n); i++ {
-		name := C.GoString((*C.char)(unsafe.Pointer(&names[i*stride])))
-		if name != "" {
-			out = append(out, name)
-		}
+	samples := diskSamples()
+	out := make([]string, 0, len(samples))
+	for _, s := range samples {
+		out = append(out, s.name)
 	}
 	return out
-}
-
-// zeroRow returns a zero-valued row matching the current column layout.
-func (d *Disk) zeroRow() []metric.Cell {
-	n := 7
-	if d.full {
-		n = 8
-	}
-	cells := make([]metric.Cell, 0, len(d.devices)*n)
-	for range d.devices {
-		for i := 0; i < n; i++ {
-			cells = append(cells, metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White})
-		}
-	}
-	return cells
 }

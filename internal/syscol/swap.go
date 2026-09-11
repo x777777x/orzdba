@@ -75,14 +75,6 @@ func (s *Swap) consume(data []byte) []metric.Cell {
 	}
 }
 
-// swapColor: delta>0 RED else WHITE (Perl keys on the raw delta, not the rate).
-func swapColor(delta int64) metric.Color {
-	if delta > 0 {
-		return metric.Red
-	}
-	return metric.White
-}
-
 // parseVMStatSwap extracts pswpin and pswpout from /proc/vmstat. Lines look
 // like "pswpin 123" / "pswpout 456".
 func parseVMStatSwap(data []byte) (pswpin, pswpout uint64) {

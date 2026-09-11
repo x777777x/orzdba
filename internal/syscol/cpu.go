@@ -137,30 +137,6 @@ func (c *CPU) Collect() []metric.Cell {
 	return cells
 }
 
-// cpuUsrColor: usr>10 RED else GREEN (Perl).
-func cpuUsrColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.Green
-}
-
-// cpuSysColor: sys>10 RED else WHITE (Perl).
-func cpuSysColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.White
-}
-
-// cpuIowColor: iow>10 RED else GREEN (Perl).
-func cpuIowColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.Green
-}
-
 // parseCPUStat parses the first ("cpu ") line of /proc/stat into the seven
 // jiffies counters [user,nice,system,idle,iowait,irq,softirq]. The Perl
 // original sums fields 1..7 (steal/guest beyond field 7 are ignored, matching

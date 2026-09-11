@@ -65,11 +65,3 @@ func readSwapUsage() (total, used, avail uint64, ok bool) {
 func fmtBytes(b float64) string {
 	return " " + render.FormatBytesValue(b, metric.UnitRaw, 8, 8)
 }
-
-// swapColor: used>0 RED else WHITE (draws attention when swap is in use).
-func swapColor(delta int64) metric.Color {
-	if delta > 0 {
-		return metric.Red
-	}
-	return metric.White
-}

@@ -151,26 +151,6 @@ func (c *CPU) Collect() []metric.Cell {
 	return cells
 }
 
-// cpuUsrColor/cpuSysColor/cpuIowColor mirror the Linux color thresholds.
-func cpuUsrColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.Green
-}
-func cpuSysColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.White
-}
-func cpuIowColor(v int) metric.Color {
-	if v > 10 {
-		return metric.Red
-	}
-	return metric.Green
-}
-
 // DarwinNCPU returns the logical CPU count via sysctl hw.ncpu.
 func DarwinNCPU() int {
 	var n C.int

@@ -47,19 +47,3 @@ func (l *Load) Collect() []metric.Cell {
 		{Text: fmt.Sprintf(" %5.2f", l15), Color: loadColor(l15, ncpu)},
 	}
 }
-
-// loadColor mirrors Perl: $val > $ncpu ? RED : WHITE.
-func loadColor(v, ncpu float64) metric.Color {
-	if v > ncpu {
-		return metric.Red
-	}
-	return metric.White
-}
-
-func zeroLoad() []metric.Cell {
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%5.2f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.2f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.2f", 0.0), Color: metric.White},
-	}
-}

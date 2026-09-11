@@ -139,15 +139,3 @@ func (m *Mem) consume(data []byte) []metric.Cell {
 		{Text: " " + render.FormatBytesValue(cachedB, m.unit, 8, 8), Raw: cachedB, Color: metric.White},
 	}
 }
-
-// memUsageColor: >90 red, >80 yellow, else green (Perl-style escalation).
-func memUsageColor(v float64) metric.Color {
-	switch {
-	case v > 90:
-		return metric.Red
-	case v > 80:
-		return metric.Yellow
-	default:
-		return metric.Green
-	}
-}

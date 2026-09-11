@@ -73,22 +73,3 @@ func readLoadavg() ([3]float64, bool) {
 		float64(int32(la.ldavg[2])) / scale,
 	}, true
 }
-
-// loadColor mirrors Perl: $val > $ncpu ? RED : WHITE. Defined in the Linux
-// load.go for !darwin; duplicated here to keep darwin files self-contained.
-func loadColor(v, ncpu float64) metric.Color {
-	if v > ncpu {
-		return metric.Red
-	}
-	return metric.White
-}
-
-// zeroLoad returns three zero-valued load cells (used on read failure),
-// matching the Linux implementation.
-func zeroLoad() []metric.Cell {
-	return []metric.Cell{
-		{Text: fmt.Sprintf("%5.2f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.2f", 0.0), Color: metric.White},
-		{Text: fmt.Sprintf(" %5.2f", 0.0), Color: metric.White},
-	}
-}
