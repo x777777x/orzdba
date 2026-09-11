@@ -54,3 +54,35 @@ func TestDaemonChildArgsStripsAcceptedDaemonForms(t *testing.T) {
 		}
 	}
 }
+
+func TestDaemonChildArgsKeepsDashLEquals(t *testing.T) {
+	// "-L=path" is pflag-legal and used to be missed by the detection, so the
+	// injected default silently won (pflag last-wins). It must suppress the
+	// injection like every other logfile spelling.
+	got := daemonChildArgs([]string{"--daemon", "-L=/tmp/z.log"}, "/tmp/orzdba.log")
+	want := []string{"-L=/tmp/z.log"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("daemonChildArgs = %v, want %v", got, want)
+	}
+}
+
+func TestFindLogfileArgForms(t *testing.T) {
+	// Every accepted spelling must resolve to its value; anything else → "".
+	cases := []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"-L", "/tmp/a.log"}, "/tmp/a.log"},
+		{[]string{"-L=/tmp/b.log"}, "/tmp/b.log"},
+		{[]string{"--logfile", "/tmp/c.log"}, "/tmp/c.log"},
+		{[]string{"--logfile=/tmp/d.log"}, "/tmp/d.log"},
+		{[]string{"-logfile", "/tmp/e.log"}, "/tmp/e.log"},
+		{[]string{"-t", "-mysql"}, ""},
+		{[]string{"-L"}, ""}, // dangling flag with no value token
+	}
+	for _, c := range cases {
+		if got := findLogfileArg(c.argv); got != c.want {
+			t.Errorf("findLogfileArg(%v) = %q, want %q", c.argv, got, c.want)
+		}
+	}
+}
