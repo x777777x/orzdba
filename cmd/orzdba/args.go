@@ -300,6 +300,11 @@ func normalizeArgs(args []string) []string {
 // normalizeArgs rewrites to double-dash. Everything else starting with a single
 // dash is left for pflag (short flags, short-with-value like -i5, bundled
 // shorts like -tc, or values like -5).
+//
+// Every entry MUST be pflag's registered flag name verbatim: a stale entry
+// (e.g. "mysql_user" when the flag registers as "mysql-user") rewrites to a
+// name pflag rejects — the Perl-style spelling silently broke instead of
+// working (8 entries were exactly that).
 var longFlagNames = map[string]bool{
 	"sys":                  true,
 	"mysql":                true,
@@ -317,14 +322,14 @@ var longFlagNames = map[string]bool{
 	"sep":                  true,
 	"ip":                   true,
 	"logfile_by_day":       true,
-	"mysql_user":           true,
-	"mysql_pass":           true,
-	"mysql_timeout":        true,
-	"mysql_tls":            true,
-	"mysql_defaults_file":  true,
-	"mysql_defaults_group": true,
-	"tps_mode":             true,
-	"header_period":        true,
+	"mysql-user":           true,
+	"mysql-pass":           true,
+	"mysql-timeout":        true,
+	"mysql-tls":            true,
+	"mysql-defaults-file":  true,
+	"mysql-defaults-group": true,
+	"tps-mode":             true,
+	"header-period":        true,
 	"logfile":              true,
 	"hit":                  true,
 	"slave":                true,

@@ -387,3 +387,23 @@ func TestParseArgsHostPortSet(t *testing.T) {
 		t.Errorf("-P only: hostSet/portSet = %v/%v, want false/true", c.hostSet, c.portSet)
 	}
 }
+
+func TestNormalizeArgsWhitelistFormsParse(t *testing.T) {
+	// Whitelist entries must be pflag's REGISTERED names verbatim. The old
+	// underscore spellings (mysql_user, tps_mode, ...) rewrote to --mysql_user
+	// etc., which pflag rejects — Perl-style single-dash support for those 8
+	// flags was silently broken. The hyphen spellings must work end-to-end.
+	c, err := parseArgs([]string{"-mysql-user", "root", "-tps-mode", "commit", "-header-period", "30"})
+	if err != nil {
+		t.Fatalf("single-dash hyphen long flags should parse: %v", err)
+	}
+	if c.mysqlUser != "root" || c.tpsMode != "commit" || c.headerPeriod != 30 {
+		t.Errorf("mysqlUser/tpsMode/headerPeriod = %q/%q/%d, want root/commit/30",
+			c.mysqlUser, c.tpsMode, c.headerPeriod)
+	}
+	// The stale underscore spelling is not whitelisted: pflag rejects it with
+	// a clean parse error (never a silent misparse).
+	if _, err := parseArgs([]string{"-mysql_user", "root"}); err == nil {
+		t.Error("-mysql_user must be rejected (not a registered flag name)")
+	}
+}
