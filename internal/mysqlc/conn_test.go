@@ -70,6 +70,21 @@ func TestResolveCLIOverridesCNF(t *testing.T) {
 	}
 }
 
+func TestResolveExplicitCLIHostPortOverridesCNF(t *testing.T) {
+	// The production flow forwards -H/-P only when the flags were explicitly
+	// set (args.go hostSet/portSet); when they ARE set they must beat my.cnf
+	// (priority: CLI > env > cnf). Without an explicit flag the caller passes
+	// zero values and the cnf host/port survive — see TestResolveCLIOverridesCNF.
+	cnf := writeCNF(t, "[client]\nuser=u\nhost=10.0.0.5\nport=3307\n")
+	c := ResolveCredentials(ResolveOpts{
+		CLIHost: "127.0.0.1", CLIPort: 3306,
+		DefaultsFile: cnf, DefaultsGroup: "client", Timeout: time.Second,
+	})
+	if c.Host != "127.0.0.1" || c.Port != 3306 {
+		t.Errorf("explicit CLI host/port = %q/%d, want 127.0.0.1/3306 (CLI wins)", c.Host, c.Port)
+	}
+}
+
 func TestResolveEnvOverridesCNF(t *testing.T) {
 	cnf := writeCNF(t, "[client]\nuser=cnfuser\npassword=cnfpass\n")
 	t.Setenv("ORZDBA_MYSQL_USER", "envuser")

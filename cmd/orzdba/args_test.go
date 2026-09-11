@@ -350,3 +350,40 @@ func TestRemoteMySQLAllowsMysqlOnly(t *testing.T) {
 		t.Errorf("remote -H + -mysql should parse, got %v", err)
 	}
 }
+
+func TestParseArgsHostPortSet(t *testing.T) {
+	// hostSet/portSet gate whether main forwards -H/-P to credential
+	// resolution; the defaults must not masquerade as explicit values and
+	// clobber host/port from my.cnf.
+	c, err := parseArgs([]string{"-mysql"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.hostSet || c.portSet {
+		t.Errorf("bare -mysql: hostSet/portSet = %v/%v, want false/false", c.hostSet, c.portSet)
+	}
+	c, err = parseArgs([]string{"-mysql", "-H", "10.0.0.5", "-P", "3307"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.hostSet || !c.portSet || c.host != "10.0.0.5" || c.port != 3307 {
+		t.Errorf("-H/-P: hostSet/portSet/host/port = %v/%v/%q/%d, want true/true/10.0.0.5/3307",
+			c.hostSet, c.portSet, c.host, c.port)
+	}
+	// -H without -P: port must stay unset so a my.cnf port can apply.
+	c, err = parseArgs([]string{"-mysql", "-H", "10.0.0.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.hostSet || c.portSet {
+		t.Errorf("-H only: hostSet/portSet = %v/%v, want true/false", c.hostSet, c.portSet)
+	}
+	// -P without -H: same asymmetry for host.
+	c, err = parseArgs([]string{"-mysql", "-P", "3307"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.hostSet || !c.portSet {
+		t.Errorf("-P only: hostSet/portSet = %v/%v, want false/true", c.hostSet, c.portSet)
+	}
+}

@@ -46,6 +46,13 @@ type config struct {
 	port              int
 	socket            string
 	host              string
+	// hostSet/portSet record whether -H/-P were explicitly passed. main only
+	// forwards the CLI values to credential resolution when set: the defaults
+	// (127.0.0.1/3306) must not masquerade as explicit choices and clobber
+	// host/port from my.cnf (they used to — silently connecting to the wrong
+	// server, see conn.go ResolveCredentials priority rules).
+	hostSet bool
+	portSet bool
 	mysqlUser         string
 	mysqlPass         string
 	mysqlDefaultsFile string
@@ -166,6 +173,8 @@ func parseArgs(argv []string) (*config, error) {
 	// -mysql is explicitly on the command line.
 	c.expand(fs.Changed)
 	c.countSet = fs.Changed("count")
+	c.hostSet = fs.Changed("host")
+	c.portSet = fs.Changed("port")
 
 	// ---- input validation (P0/P2 hardening) ----
 	if c.interval < 1 {

@@ -99,8 +99,14 @@ func main() {
 	if cfg.time {
 		renderer.AddSys(&timeCol{})
 	}
+	// ipCol is registered here (column order: right after time) but its value
+	// may be overridden by the MySQL block below, which knows the RESOLVED
+	// host — when the host comes from my.cnf, monitoredIP's CLI-only check
+	// cannot see a remote cnf host.
+	var ipc *ipCol
 	if cfg.ip != "" {
-		renderer.AddSys(&ipCol{ip: monitoredIP(cfg)})
+		ipc = &ipCol{ip: monitoredIP(cfg)}
+		renderer.AddSys(ipc)
 	}
 	if cfg.load {
 		renderer.AddSys(syscol.NewLoad(ncpu))
@@ -157,12 +163,38 @@ func main() {
 	// (M4 subset); innodb/slave/semi arrive in M5/M6.
 	var status *mycol.StatusSource
 	if cfg.mysql {
-		mc := mysqlc.ResolveCredentials(mysqlc.ResolveOpts{
+		opts := mysqlc.ResolveOpts{
 			CLIUser: cfg.mysqlUser, CLIPass: cfg.mysqlPass,
-			CLIHost: cfg.host, CLIPort: cfg.port, CLISocket: cfg.socket,
+			CLISocket: cfg.socket,
 			DefaultsFile: cfg.mysqlDefaultsFile, DefaultsGroup: cfg.mysqlDefaultsGrp,
 			Timeout: cfg.mysqlTimeout, TLS: cfg.mysqlTLS,
-		})
+		}
+		// Forward -H/-P only when explicitly passed: ResolveCredentials
+		// treats non-empty/non-zero CLI values as authoritative, so the
+		// defaults (127.0.0.1/3306) would silently override host/port from
+		// my.cnf — connecting to the wrong server without a word.
+		if cfg.hostSet {
+			opts.CLIHost = cfg.host
+		}
+		if cfg.portSet {
+			opts.CLIPort = cfg.port
+		}
+		mc := mysqlc.ResolveCredentials(opts)
+		// Re-run the remote-MySQL vs local-system mutual exclusion on the
+		// RESOLVED host: when -H is absent the host may come from my.cnf, and
+		// a remote cnf host must be rejected exactly like a remote -H would
+		// have been at parse time (that check only sees the CLI value).
+		if !isLocalHost(mc.Host) &&
+			(cfg.load || cfg.cpu || cfg.swap || cfg.mem || cfg.disk != "" || cfg.net != "" || cfg.sys) {
+			fmt.Fprintf(os.Stderr, "ERROR: MySQL host %s (resolved from my.cnf) is remote; local system metrics (-l/-c/-s/-m/-d/-n/-sys/-lazy) would be misleading. Use them only with a local host\n", mc.Host)
+			os.Exit(1)
+		}
+		// Bare -ip: a cnf-provided remote host is the monitored host. Explicit
+		// -ip <addr> keeps its verbatim value (monitoredIP already handled the
+		// CLI-remote case, so this only widens coverage to cnf hosts).
+		if ipc != nil && (cfg.ip == "" || cfg.ip == "auto") && !isLocalHost(mc.Host) {
+			ipc.ip = mc.Host
+		}
 		fmt.Fprintf(os.Stderr, "connecting to %s ...\n", mc.SafeDSN())
 		db, err := mysqlc.Open(&mc)
 		if err != nil {
