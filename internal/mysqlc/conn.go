@@ -215,7 +215,14 @@ func Open(c *Config) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Startup ping: at least 2s (cold dials can be slow) but never shorter
+	// than the configured timeout — it used to be hardcoded at 2s, so
+	// --mysql-timeout 5s was silently ignored at startup.
+	pingTimeout := 2 * time.Second
+	if c.Timeout > pingTimeout {
+		pingTimeout = c.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
