@@ -79,6 +79,7 @@ func parseCNF(r io.Reader, group string, src *CNFSource) error {
 			continue
 		}
 		val = unquote(val)
+		val = unescapeCnf(val)
 		switch key {
 		case "user":
 			src.User = val
@@ -120,6 +121,46 @@ func unquote(s string) string {
 		}
 	}
 	return s
+}
+
+// unescapeCnf decodes the escape sequences MySQL defines for option-file
+// values ("Using Option Files", my_default.cc): \b \t \n \r \\ and \s (space —
+// unlike its SQL meaning). Without this, a password written the way the mysql
+// client reads it (e.g. pa\ss for "pa ss") parsed literally here and
+// authentication failed. Sequences outside the documented set are kept
+// verbatim — this neither invents nor extends MySQL's behavior.
+func unescapeCnf(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 >= len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		switch s[i+1] {
+		case 'b':
+			b.WriteByte('\b')
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case '\\':
+			b.WriteByte('\\')
+		case 's':
+			b.WriteByte(' ')
+		default:
+			// Undocumented escape: keep both characters as written.
+			b.WriteByte(s[i])
+			b.WriteByte(s[i+1])
+		}
+		i++
+	}
+	return b.String()
 }
 
 // CheckFileMode warns (via the returned string) if the file is readable by

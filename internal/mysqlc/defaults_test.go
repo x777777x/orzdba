@@ -100,6 +100,47 @@ func TestParseIncludeNote(t *testing.T) {
 	}
 }
 
+func TestUnescapeCnf(t *testing.T) {
+	// Only the six sequences MySQL documents for option-file values are
+	// decoded; everything else stays verbatim.
+	cases := []struct{ in, want string }{
+		{"plain", "plain"},
+		{`pa\ss`, "pa s"},          // \s = space (option-file meaning)
+		{`a\tb`, "a\tb"},           // tab
+		{`a\nb`, "a\nb"},           // newline
+		{`a\rb`, "a\rb"},           // carriage return
+		{`a\\b`, `a\b`},            // \\ → one backslash
+		{`a\\sb`, `a\sb`},          // \\ then s → backslash + s (NOT space)
+		{`C:\temp`, "C:\temp"},     // \t IS documented → tab (famous MySQL gotcha)
+		{`C:\path`, `C:\path`},     // \p undocumented → verbatim
+		{`trailing\`, `trailing\`}, // dangling backslash → verbatim
+		{`no escape with "quotes"`, `no escape with "quotes"`},
+	}
+	for _, c := range cases {
+		if got := unescapeCnf(c.in); got != c.want {
+			t.Errorf("unescapeCnf(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParsePasswordWithEscapes(t *testing.T) {
+	// A password written the way the mysql client reads it (my.cnf semantics)
+	// must resolve to the same value here.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "esc.cnf")
+	content := "[client]\npassword = pa\\ss\\\\word\n" // → "pa s\word"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src, err := ParseMySQLDefaults(p, "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.Password != "pa s\\word" {
+		t.Errorf("Password = %q, want %q", src.Password, "pa s\\word")
+	}
+}
+
 func TestCheckFileMode(t *testing.T) {
 	dir := t.TempDir()
 	strict := filepath.Join(dir, "strict.cnf")
