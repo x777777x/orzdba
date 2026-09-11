@@ -54,6 +54,11 @@ type Collector struct {
 	started  bool
 	restarts int         // crash-restart budget (§9.5: abandon after 1 retry)
 	exited   atomic.Bool // set by the Wait goroutine when the child dies
+	// exitedCh is closed by the Wait goroutine alongside the exited flag —
+	// a waitable notification instead of sleep-polling. Recreated on every
+	// launch; the closing goroutine captures its OWN channel so a stale Wait
+	// can never close the successor's channel (double-close panic).
+	exitedCh chan struct{}
 	logPath  string
 	lckPath  string // /tmp/orzdba_tcprstat.p<port>.lck (port-keyed, P1-1)
 }
@@ -148,7 +153,9 @@ func (c *Collector) launchLocked() error {
 	logFile.Close()
 	c.exited.Store(false)
 	c.restarts = 0
-	go func() { _ = c.cmd.Wait(); c.exited.Store(true) }()
+	ch := make(chan struct{})
+	c.exitedCh = ch
+	go func() { _ = c.cmd.Wait(); c.exited.Store(true); close(ch) }()
 	c.started = true
 	return nil
 }
@@ -198,7 +205,9 @@ func (c *Collector) restartLocked() error {
 	}
 	logFile.Close()
 	c.exited.Store(false)
-	go func() { _ = c.cmd.Wait(); c.exited.Store(true) }()
+	ch := make(chan struct{})
+	c.exitedCh = ch
+	go func() { _ = c.cmd.Wait(); c.exited.Store(true); close(ch) }()
 	return nil
 }
 

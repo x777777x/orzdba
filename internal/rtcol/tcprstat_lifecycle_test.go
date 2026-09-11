@@ -172,15 +172,18 @@ func TestCollectCrashRestartsOnce(t *testing.T) {
 	defer c.Stop()
 
 	waitExited := func() {
-		// The Wait goroutine reaps the (immediately-exiting) child and sets the
-		// flag; under -race the goroutine can be slow to schedule, so allow a
-		// generous deadline.
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) && !c.exited.Load() {
-			time.Sleep(5 * time.Millisecond)
+		// The Wait goroutine reaps the (immediately-exiting) child, sets the
+		// flag and closes exitedCh. Select on the channel instead of
+		// sleep-polling the flag: under -race the goroutine can be slow to
+		// schedule, and polling could miss its window — the channel is a real
+		// notification.
+		select {
+		case <-c.exitedCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("child did not report exited in time")
 		}
 		if !c.exited.Load() {
-			t.Fatal("child did not report exited in time")
+			t.Fatal("exitedCh closed but the exited flag is not set")
 		}
 	}
 
