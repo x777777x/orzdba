@@ -27,7 +27,7 @@
 | 参数 | 说明 |
 |------|------|
 | `--unit` | 默认输出**原始数值**（bytes/s、字节、百分比浮点，无 k/m/g 后缀，便于转存 ES 做趋势分析）；传 `--unit` 切换为人类可读单位（k/m/g） |
-| `--full` | 对 host 模块输出**全字段**（内存 total/used/free/avail/buff/cached、CPU 9 列、网卡 rx/tx 8 列、磁盘扩展列） |
+| `--full` | 对 host 模块输出**全字段**（内存 total/used/free/avail/buff/cached、CPU 9 列、网卡 rx/tx 8 列、磁盘扩展列）。内存 `used = total − available`，与 usage% 同口径（不计可回收 page cache） |
 
 ## 支持的操作系统
 
@@ -97,7 +97,7 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 ./bin/orzdba -H 192.168.1.10 -P 3306 --mysql-user root --mysql-pass 'xxx' -mysql -i 1 -C 5
 ```
 
-凭证解析优先级：**命令行 > 环境变量（`ORZDBA_MYSQL_USER`/`ORZDBA_MYSQL_PASS`）> my.cnf（`~/.my.cnf` 等）**。密码不会出现在进程命令行中。
+凭证解析优先级：**命令行 > 环境变量（`ORZDBA_MYSQL_USER`/`ORZDBA_MYSQL_PASS`）> my.cnf（`~/.my.cnf` 等）**。推荐用环境变量或 my.cnf 传凭证；`--mysql-pass` 会把密码暴露在命令行（`ps`/`/proc/<pid>/cmdline` 同机用户可见），仅限调试。
 
 ### MySQL 连接参数
 
@@ -115,6 +115,7 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 
 | 参数 | 说明 |
 |------|------|
+| `-C, --count` | 采样次数。输出 **N+1 行**（含首个基线 tick，与 Perl 原版行为一致） |
 | `--daemon` | 后台运行（daemon 化，仅 Unix；Windows 不支持）。不指定 `-L` 时自动写 `/tmp/orzdba.log`（按天截转） |
 | `-L <path> --also-stdout` | 写文件的同时也输出到 stdout（双写）；文件默认按天截转需加 `-logfile_by_day` |
 | `-noheader` | 不输出表头（启动标题块 + 周期性表头都关闭） |
