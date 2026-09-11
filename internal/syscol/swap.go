@@ -5,6 +5,7 @@ package syscol
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"orzdba/internal/metric"
 )
@@ -18,6 +19,10 @@ type Swap struct {
 	notFirst bool
 	pswpin   uint64
 	pswpout  uint64
+	// last is the wall-clock of the previous sample: the rate denominator is
+	// the real elapsed window floored at the interval (rateDenom — same
+	// semantics as mycol StatusSource.Rate).
+	last time.Time
 }
 
 // NewSwap returns a swap collector; interval is the sampling interval in
@@ -47,6 +52,9 @@ func (s *Swap) Collect() []metric.Cell {
 // tick it emits zeros (Perl behavior). Color is RED when the raw delta
 // (pre-division) is positive, else WHITE.
 func (s *Swap) consume(data []byte) []metric.Cell {
+	now := time.Now()
+	denom := rateDenom(s.last, s.interval, now)
+	s.last = now
 	pswpin, pswpout := parseVMStatSwap(data)
 	if !s.notFirst {
 		s.pswpin = pswpin
@@ -62,8 +70,8 @@ func (s *Swap) consume(data []byte) []metric.Cell {
 	s.pswpin = pswpin
 	s.pswpout = pswpout
 	return []metric.Cell{
-		{Text: fmt.Sprintf(" %4d", int(float64(dIn)/s.interval)), Color: swapColor(dIn)},
-		{Text: fmt.Sprintf(" %4d", int(float64(dOut)/s.interval)), Color: swapColor(dOut)},
+		{Text: fmt.Sprintf(" %4d", int(float64(dIn)/denom)), Color: swapColor(dIn)},
+		{Text: fmt.Sprintf(" %4d", int(float64(dOut)/denom)), Color: swapColor(dOut)},
 	}
 }
 

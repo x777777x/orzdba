@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"orzdba/internal/metric"
 )
@@ -352,6 +353,22 @@ func TestNetCounterResetClampsToZero(t *testing.T) {
 		if strings.Contains(c.Text, "-") {
 			t.Errorf("reset cell %d text = %q, want no negative value", i, c.Text)
 		}
+	}
+}
+
+func TestNetRateDenomElapsedWindow(t *testing.T) {
+	// A tick that runs long (5s between samples, interval 1) must divide the
+	// delta by the real window, not the fixed interval (which would overstate
+	// the rate 5x). nowFn is the injected clock seam.
+	n := NewNet("eth0", 1, false, metric.UnitRaw)
+	base := time.Now()
+	ticks := []time.Time{base, base.Add(5 * time.Second)}
+	i := 0
+	n.nowFn = func() time.Time { i++; return ticks[i-1] }
+	n.consume(mustRead(t, "netdev_tick1.txt"))            // baseline, last=base
+	cells := n.consume(mustRead(t, "netdev_tick2.txt"))   // delta 1572864 over 5s
+	if cells[0].Raw != 1572864.0/5 {
+		t.Errorf("recv Raw = %v, want %v (delta / 5s window)", cells[0].Raw, 1572864.0/5)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"orzdba/internal/metric"
 )
@@ -91,4 +92,18 @@ func clamp0[T cmp.Ordered](v T) T {
 		return zero
 	}
 	return v
+}
+
+// rateDenom returns the denominator for a per-second rate: the real elapsed
+// window between the two samples, floored at the configured interval. A fixed
+// interval overstates the rate whenever a tick runs long — the main loop
+// sleeps the interval AFTER collecting, so real windows only ever grow.
+// Same semantics as mycol StatusSource.Rate (P1-6).
+func rateDenom(last time.Time, interval float64, now time.Time) float64 {
+	if !last.IsZero() {
+		if e := now.Sub(last).Seconds(); e > interval {
+			return e
+		}
+	}
+	return interval
 }

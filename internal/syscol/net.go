@@ -5,6 +5,7 @@ package syscol
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"orzdba/internal/metric"
 	"orzdba/internal/render"
@@ -32,6 +33,11 @@ type Net struct {
 	send     uint64
 	// full-mode counters (deltaable): packets/errs/drop for rx and tx.
 	prev [6]uint64
+	// last is the wall-clock of the previous sample: the rate denominator is
+	// the real elapsed window floored at the interval (rateDenom — same
+	// semantics as mycol StatusSource.Rate). nowFn is a test clock seam.
+	last  time.Time
+	nowFn func() time.Time
 }
 
 // NewNet returns a net collector for the named interface. The interface must
@@ -39,7 +45,7 @@ type Net struct {
 // (plan §11.1). full enables the 8-column detail output; unit selects byte
 // presentation.
 func NewNet(name string, interval int, full bool, unit metric.UnitMode) *Net {
-	return &Net{name: name, interval: float64(interval), full: full, unit: unit}
+	return &Net{name: name, interval: float64(interval), full: full, unit: unit, nowFn: time.Now}
 }
 
 func (*Net) Name() string { return "net" }
@@ -95,6 +101,9 @@ func parseNetDevFull(data []byte, dev string) netStat {
 // First tick emits zeros. Color is RED when the rate exceeds 1 MiB/s, else
 // WHITE (Perl).
 func (n *Net) consume(data []byte) []metric.Cell {
+	now := n.nowFn()
+	denom := rateDenom(n.last, n.interval, now)
+	n.last = now
 	s := parseNetDevFull(data, n.name)
 	if !n.notFirst {
 		n.recv = s.rxBytes
@@ -107,8 +116,8 @@ func (n *Net) consume(data []byte) []metric.Cell {
 	dSend := clamp0(float64(s.txBytes) - float64(n.send))
 	n.recv = s.rxBytes
 	n.send = s.txBytes
-	recvRate := dRecv / n.interval
-	sendRate := dSend / n.interval
+	recvRate := dRecv / denom
+	sendRate := dSend / denom
 
 	if !n.full {
 		return []metric.Cell{

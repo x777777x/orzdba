@@ -11,6 +11,7 @@ import "C"
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unsafe"
 
 	"orzdba/internal/metric"
@@ -33,6 +34,10 @@ type Net struct {
 	recv     uint64
 	send     uint64
 	prev     [6]uint64
+	// last is the wall-clock of the previous sample: the rate denominator is
+	// the real elapsed window floored at the interval (rateDenom — same
+	// semantics as mycol StatusSource.Rate and the Linux Net).
+	last time.Time
 }
 
 // NewNet returns a net collector for the named interface. The interface must
@@ -54,6 +59,9 @@ func (n *Net) Headline() (string, string) {
 // Collect reads per-interface counters via getifaddrs and formats recv/send
 // rates.
 func (n *Net) Collect() []metric.Cell {
+	now := time.Now()
+	denom := rateDenom(n.last, n.interval, now)
+	n.last = now
 	s := n.readStats()
 	if !n.notFirst {
 		n.recv = s.rxBytes
@@ -66,8 +74,8 @@ func (n *Net) Collect() []metric.Cell {
 	dSend := clamp0(float64(s.txBytes) - float64(n.send))
 	n.recv = s.rxBytes
 	n.send = s.txBytes
-	recvRate := dRecv / n.interval
-	sendRate := dSend / n.interval
+	recvRate := dRecv / denom
+	sendRate := dSend / denom
 
 	if !n.full {
 		return []metric.Cell{
