@@ -9,6 +9,7 @@
 package logsink
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -64,7 +65,12 @@ func openFile(path string) (f *os.File, fresh bool, err error) {
 	if err != nil {
 		return nil, false, err
 	}
-	_ = os.Chmod(path, 0o600)
+	// Chmod fallback for a pre-existing file created with a wider mode: if it
+	// cannot be tightened (e.g. not ours), say so instead of silently writing
+	// monitoring data to a group/other-readable file.
+	if err := os.Chmod(path, 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "warn: cannot chmod %s to 0600: %v — the file may keep a wider mode\n", path, err)
+	}
 	// A file is "fresh" (needs a title) if it was empty before appending.
 	if fi, serr := f.Stat(); serr == nil {
 		fresh = fi.Size() == 0
