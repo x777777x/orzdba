@@ -388,6 +388,16 @@ func TestParseArgsHostPortSet(t *testing.T) {
 	}
 }
 
+func TestParseArgsSepRejectsNewline(t *testing.T) {
+	// A newline inside --sep would tear every data row into multiple lines.
+	if _, err := parseArgs([]string{"-sys", "--sep", "a\nb"}); err == nil {
+		t.Error("--sep with an embedded newline must be rejected")
+	}
+	if _, err := parseArgs([]string{"-sys", "--sep", ","}); err != nil {
+		t.Errorf("a normal --sep must still parse, got %v", err)
+	}
+}
+
 func TestNormalizeArgsWhitelistFormsParse(t *testing.T) {
 	// Whitelist entries must be pflag's REGISTERED names verbatim. The old
 	// underscore spellings (mysql_user, tps_mode, ...) rewrote to --mysql_user

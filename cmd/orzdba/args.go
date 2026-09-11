@@ -186,6 +186,11 @@ func parseArgs(argv []string) (*config, error) {
 	if c.tpsMode != "iud" && c.tpsMode != "commit" {
 		return nil, fmt.Errorf("--tps-mode must be 'iud' or 'commit' (got %q)", c.tpsMode)
 	}
+	// A newline inside the separator would tear every data row into multiple
+	// lines and corrupt the log format — reject it outright.
+	if strings.ContainsAny(c.sep, "\n\r") {
+		return nil, fmt.Errorf("--sep must not contain a newline (got %q) — it would break the one-row-per-tick format", c.sep)
+	}
 	if c.logfileByDay && c.logfile == "" {
 		return nil, fmt.Errorf("-logfile_by_day requires -L/--logfile")
 	}
