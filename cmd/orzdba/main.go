@@ -281,17 +281,29 @@ func main() {
 		os.Exit(0)
 	}()
 
-	runLoop(cfg, renderer, cpu, needCPU, status, sink, writeTitle)
+	if err := runLoop(cfg, renderer, cpu, needCPU, status, sink, writeTitle); err != nil {
+		// Same cleanup path as the signal handler — Stop reaps tcprstat and
+		// unlinks its log/lock files; os.Exit alone would skip the deferred
+		// Stop and orphan the subprocess.
+		if rtCol != nil {
+			rtCol.Stop()
+		}
+		_ = sink.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // runLoop is the polling loop. It mirrors the Perl original's ordering:
 // day-rollover check, exit-check, header (every period), increment, collect,
-// render, sleep.
-func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, status *mycol.StatusSource, sink logsink.Sink, writeTitle func(io.Writer)) {
+// render, sleep. It returns an error only when the output sink has failed
+// beyond recovery (see sinkWriter) — main aborts with exit 1 in that case.
+func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, status *mycol.StatusSource, sink logsink.Sink, writeTitle func(io.Writer)) error {
 	var mycount int
 	// remaining is the local -C budget; day-rollover subtracts mycount from it
 	// (Perl §7.13: `count -= mycount`), so we don't mutate cfg.count.
 	remaining, countSet := cfg.count, cfg.countSet
+	out := &sinkWriter{sink: sink}
 	for {
 		// -logfile_by_day: rotate at midnight, reprint title (only when the
 		// new day's file is fresh — P1-3 avoids duplicate titles on append),
@@ -310,10 +322,12 @@ func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, sta
 		// exactly — including its off-by-one (so -C N emits N+1 rows). Kept
 		// faithful because plan §15.1 demands line-by-line parity with Perl.
 		if countSet && mycount > remaining {
-			return
+			return nil
 		}
 		if mycount%r.Period() == 0 {
-			fmt.Fprint(sink, r.Header())
+			if out.write(r.Header()) {
+				return errSinkDead
+			}
 		}
 		mycount++
 		if needCPU {
@@ -322,9 +336,37 @@ func runLoop(cfg *config, r *render.Renderer, cpu *syscol.CPU, needCPU bool, sta
 		if status != nil {
 			status.Fetch()
 		}
-		fmt.Fprint(sink, r.BuildRow())
+		if out.write(r.BuildRow()) {
+			return errSinkDead
+		}
 		time.Sleep(time.Duration(cfg.interval) * time.Second)
 	}
+}
+
+// errSinkDead is returned by runLoop once the output sink has failed 3
+// consecutive writes (see sinkWriter).
+var errSinkDead = fmt.Errorf("output sink failed 3 consecutive writes (logfile full or removed?) — aborting instead of dropping data silently")
+
+// sinkWriter guards the data path against silent data loss. Write errors used
+// to be discarded at the call site: with a full disk or a removed logfile,
+// orzdba kept "running" while every row quietly vanished — the worst failure
+// mode for a monitor. Consecutive failures are counted; the caller aborts at
+// the third so the operator (and any supervision) finds out immediately.
+type sinkWriter struct {
+	sink  logsink.Sink
+	fails int
+}
+
+// write emits one chunk. It returns true when the writer must be considered
+// dead (3 consecutive failures); a successful write resets the count.
+func (w *sinkWriter) write(s string) bool {
+	_, err := fmt.Fprint(w.sink, s)
+	if err == nil {
+		w.fails = 0
+		return false
+	}
+	w.fails++
+	return w.fails >= 3
 }
 
 // mysqlTitleLine returns the "DB  : <databases>" title line, listing non-system
