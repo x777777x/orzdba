@@ -143,6 +143,8 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 
 SIGTERM / SIGINT / SIGHUP（终端断开）都会优雅退出：自动停止并清理 `-rt` 的 tcprstat 子进程、删除其锁文件后关闭日志。`kill -9` 不触发任何清理——tcprstat 子进程会残留（持续抓包），需手工 `kill`；`-rt` 的端口锁文件可被下一个实例自动回收。
 
+> **已知限制（`-rt` 端口锁）**：锁基于 PID 文件判活，存在两个经评估后刻意保留的罕见缺陷——① PID 复用会把陈旧锁误判为被持有（拒绝启动；按报错确认该 PID 并非 orzdba 后删除锁文件即可恢复）；② 两个实例在毫秒级窗口内并发回收同一把陈旧锁时可能双双持锁（重复抓包；日志按 PID 分文件，互不污染数据）。根治需迁移 flock，权衡理由见 `internal/rtcol/tcprstat.go` 的 `acquireLock` 注释。
+
 ## 设计要点
 
 - **每 tick 一条 SQL**：`StatusSource` 每个采样间隔只发一次 `SHOW GLOBAL STATUS`，结果分发给所有 MySQL 子模块，避免 orzdba-go 的每模块各查一次。

@@ -105,6 +105,24 @@ func (c *Collector) Start() error {
 // from a crashed process, it recovers by checking whether the recorded PID is
 // still alive (signal 0). P1-1: previously the lock was per-pid and could
 // never guard a second instance; now it is per-port and self-healing.
+//
+// Known limitations (deliberate — read before "fixing"):
+//   - PID reuse (rare, FAIL-SAFE): a wrapped-around PID landing on the stale
+//     lock's recorded value is misjudged as a live holder and -rt refuses to
+//     start. The error names the pid and the lock path; deleting the file
+//     recovers.
+//   - Reclaim TOCTOU (rarer, FAIL-OPEN): between readLockPID and os.Remove
+//     below, a concurrently starting instance can complete its own reclaim of
+//     the same stale lock — C reads the stale pid, B removes+recreates, C then
+//     removes B's FRESH lock (Remove never validates content) and recreates —
+//     leaving both instances as believed holders: duplicate capture on the
+//     port. The logs are per-pid, so the two never corrupt each other's data.
+//
+// The class-wide fix is a no-unlink syscall.Flock (keep the file, release by
+// closing the fd). Deliberately not adopted: flock combined with unlink opens
+// the SAME double-holder hole, syscall.Flock needs a unix/windows split, and
+// it rewrites a working lifecycle to close two windows far below operational
+// significance.
 func (c *Collector) acquireLock() error {
 	lck, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err == nil {
@@ -118,9 +136,10 @@ func (c *Collector) acquireLock() error {
 	// Lock exists - is its owner still alive? (procAlive: signal 0 on Unix.)
 	if pid, ok := readLockPID(c.lckPath); ok {
 		if procAlive(pid) {
-			return fmt.Errorf("cannot acquire tcprstat lock %s: another orzdba -rt instance (pid %d) monitors port %s", c.lckPath, pid, c.port)
+			return fmt.Errorf("cannot acquire tcprstat lock %s: held by pid %d for port %s — if pid %d is not an orzdba process (stale lock via PID reuse), remove %s and retry", c.lckPath, pid, c.port, pid, c.lckPath)
 		}
-		// Stale lock: owner is gone. Reclaim it.
+		// Stale lock: owner is gone. Reclaim it. (TOCTOU window against a
+		// concurrently starting instance — see known limitations above.)
 		_ = os.Remove(c.lckPath)
 		if lck, err := os.OpenFile(c.lckPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
 			_, _ = fmt.Fprintf(lck, "%d\n", os.Getpid())
