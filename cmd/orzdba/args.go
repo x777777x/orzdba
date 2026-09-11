@@ -43,16 +43,16 @@ type config struct {
 	innodb bool
 
 	// MySQL (M3/M4 — collected now, wired later).
-	port              int
-	socket            string
-	host              string
+	port   int
+	socket string
+	host   string
 	// hostSet/portSet record whether -H/-P were explicitly passed. main only
 	// forwards the CLI values to credential resolution when set: the defaults
 	// (127.0.0.1/3306) must not masquerade as explicit choices and clobber
 	// host/port from my.cnf (they used to — silently connecting to the wrong
 	// server, see conn.go ResolveCredentials priority rules).
-	hostSet bool
-	portSet bool
+	hostSet           bool
+	portSet           bool
 	mysqlUser         string
 	mysqlPass         string
 	mysqlDefaultsFile string

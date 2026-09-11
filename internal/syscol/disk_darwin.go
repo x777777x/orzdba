@@ -210,10 +210,10 @@ func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
 			{Text: fmt.Sprintf("%7.1f%7.1f", float64(rdOps), float64(wrOps)), Raw: float64(rdOps), Color: metric.White},
 			{Text: fmt.Sprintf("%8.1f", float64(rdBytes)/1024), Raw: float64(rdBytes), Color: diskBytesColor(float64(rdBytes) / 1024)},
 			{Text: fmt.Sprintf(" %8.1f", float64(wrBytes)/1024), Raw: float64(wrBytes), Color: diskBytesColor(float64(wrBytes) / 1024)},
-			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White},  // queue
-			{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White},  // await
-			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White},  // svctm
-			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White},  // %util
+			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // queue
+			{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // await
+			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // svctm
+			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // %util
 		}
 	}
 	// Full mode: r/s w/s rkB/s wkB/s avgqu-sz avgrq-sz %iow %util.
@@ -221,10 +221,10 @@ func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
 		{Text: fmt.Sprintf(" %5.1f%6.1f", float64(rdOps), float64(wrOps)), Raw: float64(rdOps), Color: metric.White},
 		{Text: fmt.Sprintf(" %6.1f", float64(rdBytes)/1024), Raw: float64(rdBytes), Color: diskBytesColor(float64(rdBytes) / 1024)},
 		{Text: fmt.Sprintf(" %6.1f", float64(wrBytes)/1024), Raw: float64(wrBytes), Color: diskBytesColor(float64(wrBytes) / 1024)},
-		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White},  // avgqu-sz
-		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White},  // avgrq-sz
-		{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White},  // %iow
-		{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White},  // %util
+		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // avgqu-sz
+		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // avgrq-sz
+		{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // %iow
+		{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // %util
 	}
 }
 

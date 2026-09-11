@@ -19,7 +19,7 @@ import (
 // /proc/loadavg on Linux; macOS exposes the same three load averages via
 // sysctl vm.loadavg.
 type loadavg struct {
-	ldavg [3]C.fixpt_t
+	ldavg  [3]C.fixpt_t
 	fscale C.long
 }
 

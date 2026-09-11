@@ -165,7 +165,7 @@ func main() {
 	if cfg.mysql {
 		opts := mysqlc.ResolveOpts{
 			CLIUser: cfg.mysqlUser, CLIPass: cfg.mysqlPass,
-			CLISocket: cfg.socket,
+			CLISocket:    cfg.socket,
 			DefaultsFile: cfg.mysqlDefaultsFile, DefaultsGroup: cfg.mysqlDefaultsGrp,
 			Timeout: cfg.mysqlTimeout, TLS: cfg.mysqlTLS,
 		}
@@ -716,9 +716,9 @@ func primaryIP() string {
 // monitoredIP returns the IP of the monitored host for the -ip column:
 //   - explicit -ip <addr> → that address verbatim
 //   - bare -ip ("auto"):
-//       remote MySQL (-H not local) → the -H address
-//       local (no MySQL, or -H local) → this host's primary IP, falling back
-//         to 127.0.0.1 when no non-loopback address exists
+//     remote MySQL (-H not local) → the -H address
+//     local (no MySQL, or -H local) → this host's primary IP, falling back
+//     to 127.0.0.1 when no non-loopback address exists
 func monitoredIP(cfg *config) string {
 	if cfg.ip != "" && cfg.ip != "auto" {
 		return cfg.ip // user explicitly chose the IP column value

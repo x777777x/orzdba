@@ -365,8 +365,8 @@ func TestNetRateDenomElapsedWindow(t *testing.T) {
 	ticks := []time.Time{base, base.Add(5 * time.Second)}
 	i := 0
 	n.nowFn = func() time.Time { i++; return ticks[i-1] }
-	n.consume(mustRead(t, "netdev_tick1.txt"))            // baseline, last=base
-	cells := n.consume(mustRead(t, "netdev_tick2.txt"))   // delta 1572864 over 5s
+	n.consume(mustRead(t, "netdev_tick1.txt"))          // baseline, last=base
+	cells := n.consume(mustRead(t, "netdev_tick2.txt")) // delta 1572864 over 5s
 	if cells[0].Raw != 1572864.0/5 {
 		t.Errorf("recv Raw = %v, want %v (delta / 5s window)", cells[0].Raw, 1572864.0/5)
 	}
