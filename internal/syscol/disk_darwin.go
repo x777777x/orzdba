@@ -72,6 +72,12 @@ static int orzdba_disk_stats(char* names, int nameStride,
             n++;
             break;
         }
+        // The walk above only releases the *previous* parent each round, so
+        // the final one would leak on every exit path (Statistics hit, parent
+        // fetch failure, loop exhaustion) — 1 io_registry_entry_t per disk
+        // per tick. Release it here; on the i==0 failure path parent == media
+        // and the guard skips the release.
+        if (parent != media) IOObjectRelease(parent);
         IOObjectRelease(media);
     }
     IOObjectRelease(iter);
