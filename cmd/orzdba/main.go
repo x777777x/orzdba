@@ -189,6 +189,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "ERROR: MySQL host %s (resolved from my.cnf) is remote; local system metrics (-l/-c/-s/-m/-d/-n/-sys/-lazy) would be misleading. Use them only with a local host\n", mc.Host)
 			os.Exit(1)
 		}
+		// A socket always wins over host:port in the DSN (conn.go). When the
+		// resolved host is remote, silently connecting to a LOCAL socket
+		// would monitor a different server than the user asked for — refuse
+		// instead of guessing.
+		if mc.Socket != "" && mc.Host != "" && !isLocalHost(mc.Host) {
+			fmt.Fprintf(os.Stderr, "ERROR: socket %s (my.cnf/-S) resolves while host %s is remote — the socket would silently take precedence and connect to a local server. Remove one of the two\n", mc.Socket, mc.Host)
+			os.Exit(1)
+		}
 		// Bare -ip: a cnf-provided remote host is the monitored host. Explicit
 		// -ip <addr> keeps its verbatim value (monitoredIP already handled the
 		// CLI-remote case, so this only widens coverage to cnf hosts).
