@@ -70,11 +70,13 @@ func parseMemInfo(data []byte) memInfo {
 	return m
 }
 
-// memUsage computes usage% (0 when total is 0).
-func (m memInfo) usage() float64 {
-	if m.total == 0 {
-		return 0
-	}
+// availKB returns the available-memory estimate in kB: MemAvailable when the
+// kernel provides it, else the Perl-era free+buffers+cached approximation.
+// usage% and the --full used/avail columns all derive from THIS value so the
+// columns can never disagree (they used different definitions: usage was
+// MemAvailable-based while used was total-free — on a cache-heavy box the
+// same row showed usage≈31% next to used≈94%).
+func (m memInfo) availKB() uint64 {
 	avail := m.available
 	if avail == 0 { // no MemAvailable (pre-3.14): approximate with free+buff+cached
 		avail = m.free + m.buffers + m.cached
@@ -82,7 +84,15 @@ func (m memInfo) usage() float64 {
 	if avail > m.total {
 		avail = m.total
 	}
-	return float64(m.total-avail) / float64(m.total) * 100
+	return avail
+}
+
+// memUsage computes usage% (0 when total is 0).
+func (m memInfo) usage() float64 {
+	if m.total == 0 {
+		return 0
+	}
+	return float64(m.total-m.availKB()) / float64(m.total) * 100
 }
 
 // Collect reads /proc/meminfo and formats the memory columns. Raw bytes are
@@ -101,11 +111,12 @@ func (m *Mem) consume(data []byte) []metric.Cell {
 		return []metric.Cell{{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}}
 	}
 	usage := info.usage()
-	// bytes = kB * 1024
+	// bytes = kB * 1024. used = total - available: the same definition usage%
+	// is computed from (NOT total - free, which double-counts page cache).
 	totalB := float64(info.total) * 1024
-	usedB := float64(info.total-info.free) * 1024
+	usedB := float64(info.total-info.availKB()) * 1024
 	freeB := float64(info.free) * 1024
-	availB := float64(info.total) * 1024 * (1 - usage/100)
+	availB := float64(info.availKB()) * 1024
 	buffB := float64(info.buffers) * 1024
 	cachedB := float64(info.cached) * 1024
 

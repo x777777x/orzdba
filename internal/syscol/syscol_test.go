@@ -246,6 +246,15 @@ func TestMemCollectFull(t *testing.T) {
 	if cells[1].Raw != 16384000*1024 {
 		t.Errorf("total Raw = %v, want %v", cells[1].Raw, 16384000*1024)
 	}
+	// used = total - available (the SAME definition usage% is computed from,
+	// NOT total-free which double-counted page cache and contradicted the
+	// usage column on the same row). Fixture: MemAvailable = 8000000 kB.
+	if cells[2].Raw != float64((16384000-8000000)*1024) {
+		t.Errorf("used Raw = %v, want %v (total - MemAvailable)", cells[2].Raw, (16384000-8000000)*1024)
+	}
+	if cells[4].Raw != float64(8000000*1024) {
+		t.Errorf("avail Raw = %v, want %v", cells[4].Raw, 8000000*1024)
+	}
 }
 
 func TestMemMissingDegrade(t *testing.T) {
