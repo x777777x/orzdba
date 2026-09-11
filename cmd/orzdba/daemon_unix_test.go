@@ -41,3 +41,16 @@ func TestDaemonChildArgsPreservesOtherFlags(t *testing.T) {
 		t.Errorf("daemonChildArgs = %v, want %v", got, want)
 	}
 }
+
+func TestDaemonChildArgsStripsAcceptedDaemonForms(t *testing.T) {
+	// The parser accepts -daemon (normalizeArgs whitelist) and --daemon=<bool>
+	// (pflag ParseBool: 1/t/T/TRUE/...). Any of these left in the child's argv
+	// makes it daemonize again — an endless fork/exec loop. All must go.
+	for _, daemonForm := range []string{"-daemon", "--daemon", "--daemon=1", "--daemon=TRUE"} {
+		got := daemonChildArgs([]string{daemonForm, "-t"}, "/tmp/orzdba.log")
+		want := []string{"-t", "-L", "/tmp/orzdba.log", "-logfile_by_day"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("daemonChildArgs(%q) = %v, want %v", daemonForm, got, want)
+		}
+	}
+}

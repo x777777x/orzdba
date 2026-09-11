@@ -58,7 +58,13 @@ func daemonChildArgs(argv []string, defaultLog string) []string {
 	args := make([]string, 0, len(argv)+2)
 	hasLogfile := false
 	for _, a := range argv {
-		if a == "--daemon" || a == "--daemon=true" {
+		// Strip the daemon flag in every form the parser accepts: "-daemon"
+		// (Perl-style single dash — longFlagNames whitelists it, so
+		// normalizeArgs turns it into --daemon) and "--daemon" /
+		// "--daemon=<bool>" (pflag ParseBool accepts 1/t/T/TRUE/...). Missing
+		// any accepted form leaves the flag in the child's argv, and the
+		// child daemonizes again — an endless fork/exec loop.
+		if a == "-daemon" || a == "--daemon" || strings.HasPrefix(a, "--daemon=") {
 			continue
 		}
 		// Detect any logfile form: "-L", "--logfile", "--logfile=path".
