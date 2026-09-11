@@ -138,6 +138,10 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 
 运行 `orzdba -h` 可查看完整参数列表。
 
+### 停止与信号
+
+SIGTERM / SIGINT / SIGHUP（终端断开）都会优雅退出：自动停止并清理 `-rt` 的 tcprstat 子进程、删除其锁文件后关闭日志。`kill -9` 不触发任何清理——tcprstat 子进程会残留（持续抓包），需手工 `kill`；`-rt` 的端口锁文件可被下一个实例自动回收。
+
 ## 设计要点
 
 - **每 tick 一条 SQL**：`StatusSource` 每个采样间隔只发一次 `SHOW GLOBAL STATUS`，结果分发给所有 MySQL 子模块，避免 orzdba-go 的每模块各查一次。

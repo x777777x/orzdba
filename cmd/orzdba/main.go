@@ -296,9 +296,11 @@ func main() {
 		writeTitle(sink)
 	}
 
-	// Signal handling: SIGINT/SIGTERM → cleanup + exit 0 (plan §11.3).
+	// Signal handling: SIGINT/SIGTERM/SIGHUP → cleanup + exit 0 (plan §11.3).
+	// SIGHUP covers terminal disconnect: without it the default disposition
+	// kills the process without running the cleanup below, orphaning tcprstat.
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-stop
 		if rtCol != nil {
