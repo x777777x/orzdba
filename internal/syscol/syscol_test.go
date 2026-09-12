@@ -4,6 +4,7 @@ package syscol
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -410,5 +411,70 @@ func TestDiskCounterResetClampsToZero(t *testing.T) {
 		if strings.Contains(c.Text, "-") {
 			t.Errorf("reset cell %d text = %q, want no negative value", i, c.Text)
 		}
+	}
+}
+
+func TestDiskDegradeZeroDeltamsThenRecover(t *testing.T) {
+	// CPU diffs unavailable for a tick (e.g. /proc/stat unreadable) leaves
+	// deltams == 0. The consume path must emit zeros — never Inf/NaN from
+	// division by zero — AND refresh prev, so the recovery ticks compute
+	// real rates instead of a since-boot spike.
+	cpu := NewCPU(2, false, false)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
+
+	// Degrade tick: no CPU sample yet → deltams() == 0.
+	cells := d.consume(mustRead(t, "diskstats_tick1.txt"))
+	if len(cells) != 7 {
+		t.Fatalf("degrade row = %d cells, want 7", len(cells))
+	}
+	for i, c := range cells {
+		if c.Text != "      0" {
+			t.Errorf("degrade cell %d = %q, want zero cell", i, c.Text)
+		}
+	}
+
+	// Recovery: first tick re-reads the same counters (prev was refreshed by
+	// the degrade) → zeros, then the real delta tick.
+	cpu.consume(mustRead(t, "stat_tick1.txt"))
+	d.consume(mustRead(t, "diskstats_tick1.txt"))
+	cpu.consume(mustRead(t, "stat_tick2.txt"))
+	cells = d.consume(mustRead(t, "diskstats_tick2.txt"))
+	for i, c := range cells {
+		if math.IsInf(c.Raw, 0) || math.IsNaN(c.Raw) {
+			t.Fatalf("recovery cell %d Raw = %v, want finite", i, c.Raw)
+		}
+	}
+	// rd_ios_s = 1000*(160-100)/500 = 120 — same as the normal-path test.
+	if cells[0].Raw != 120 {
+		t.Errorf("recovery r/s Raw = %v, want 120 (no since-boot spike)", cells[0].Raw)
+	}
+}
+
+func TestMemFallbackWithoutMemAvailable(t *testing.T) {
+	// Pre-3.14 kernels export no MemAvailable: availKB must fall back to
+	// free+buffers+cached and usage% must derive from that same value.
+	m := parseMemInfo(mustRead(t, "meminfo_noavail.txt"))
+	if m.available != 0 {
+		t.Fatalf("fixture must lack MemAvailable, got %d", m.available)
+	}
+	// total 16384000, free 2000000, buffers 500000, cached 4500000 kB.
+	if got := m.availKB(); got != 7000000 {
+		t.Errorf("availKB fallback = %d, want 7000000 (free+buff+cached)", got)
+	}
+	// usage = (16384000-7000000)/16384000*100 ≈ 57.31
+	if u := m.usage(); u < 57.2 || u > 57.4 {
+		t.Errorf("usage = %v, want ~57.3", u)
+	}
+}
+
+func TestMemAvailClampExceedsTotal(t *testing.T) {
+	// free+buffers+cached can exceed total under odd accounting (shmem etc.):
+	// availKB must clamp to total so usage never goes negative.
+	m := memInfo{total: 1000, free: 900, buffers: 800, cached: 800, ok: true}
+	if got := m.availKB(); got != 1000 {
+		t.Errorf("availKB = %d, want 1000 (clamped to total)", got)
+	}
+	if u := m.usage(); u != 0 {
+		t.Errorf("usage = %v, want 0", u)
 	}
 }
