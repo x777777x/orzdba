@@ -103,8 +103,15 @@ func parseNetDevFull(data []byte, dev string) netStat {
 func (n *Net) consume(data []byte) []metric.Cell {
 	now := n.nowFn()
 	denom := rateDenom(n.last, n.interval, now)
-	n.last = now
 	s := parseNetDevFull(data, n.name)
+	if !s.ok {
+		// Device absent or /proc/net/dev unreadable: zeros for this tick, but
+		// keep the baseline and the sample clock — the recovery tick then
+		// rates over the real outage window (delta / true elapsed) instead of
+		// a since-boot spike.
+		return netZeros(n.full)
+	}
+	n.last = now
 	if !n.notFirst {
 		n.recv = s.rxBytes
 		n.send = s.txBytes

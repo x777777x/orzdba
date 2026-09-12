@@ -70,6 +70,11 @@ func (c *CPU) Sample() {
 func (c *CPU) consume(data []byte) {
 	v2, ok := parseCPUStat(data)
 	if !ok {
+		// Data source failed (/proc/stat unreadable): show 0 for this tick
+		// like every other collector, but KEEP prev/prevTotal — the recovery
+		// tick's totalDiff then spans the outage and yields the true average
+		// utilization over the window instead of a since-boot spike.
+		c.pct = [7]float64{}
 		return
 	}
 	total2 := v2[0] + v2[1] + v2[2] + v2[3] + v2[4] + v2[5] + v2[6]

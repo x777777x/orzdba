@@ -61,8 +61,15 @@ func (n *Net) Headline() (string, string) {
 func (n *Net) Collect() []metric.Cell {
 	now := time.Now()
 	denom := rateDenom(n.last, n.interval, now)
-	n.last = now
 	s := n.readStats()
+	if !s.ok {
+		// getifaddrs failed or the interface disappeared: zeros for this
+		// tick, but keep the baseline and the sample clock — the recovery
+		// tick then rates over the real outage window instead of a
+		// since-boot spike (same policy as the Linux Net).
+		return netZeros(n.full)
+	}
+	n.last = now
 	if !n.notFirst {
 		n.recv = s.rxBytes
 		n.send = s.txBytes

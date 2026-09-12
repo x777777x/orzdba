@@ -52,6 +52,16 @@ func (s *Swap) Collect() []metric.Cell {
 // tick it emits zeros (Perl behavior). Color is RED when the raw delta
 // (pre-division) is positive, else WHITE.
 func (s *Swap) consume(data []byte) []metric.Cell {
+	if data == nil {
+		// /proc/vmstat unreadable (Collect's error path): zeros for this
+		// tick, but keep pswpin/pswpout and the sample clock — the recovery
+		// tick then rates over the real outage window instead of a since-boot
+		// spike.
+		return []metric.Cell{
+			{Text: fmt.Sprintf(" %4d", 0), Color: metric.White},
+			{Text: fmt.Sprintf(" %4d", 0), Color: metric.White},
+		}
+	}
 	now := time.Now()
 	denom := rateDenom(s.last, s.interval, now)
 	s.last = now

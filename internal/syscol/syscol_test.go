@@ -382,6 +382,61 @@ func TestNetRateDenomElapsedWindow(t *testing.T) {
 	}
 }
 
+// ---- failed data-source ticks: zero the columns, keep the baseline ----
+
+func TestCPUFailedTickZerosKeepsBaseline(t *testing.T) {
+	// /proc/stat unreadable for one tick: the columns must show 0 (like every
+	// other collector), not freeze at the last values — and the baseline must
+	// survive so the recovery tick reports the normal tick1→tick2 deltas.
+	c := NewCPU(2, true, false)
+	c.consume(mustRead(t, "stat_tick1.txt")) // since-boot baseline
+	c.consume(nil)                           // failed tick
+	cells := c.Collect()
+	for i, cell := range cells {
+		if cell.Raw != 0 {
+			t.Fatalf("failed-tick cell %d Raw = %v, want 0", i, cell.Raw)
+		}
+	}
+	c.consume(mustRead(t, "stat_tick2.txt")) // recovery: same as the normal second tick
+	cells = c.Collect()
+	if cells[0].Raw < 9.9 || cells[0].Raw > 10.1 {
+		t.Errorf("recovery usr Raw = %v, want ~10 (baseline survived the failed tick)", cells[0].Raw)
+	}
+}
+
+func TestNetFailedTickKeepsBaseline(t *testing.T) {
+	// One unreadable /proc/net/dev tick must NOT zero the baseline: the
+	// recovery rate spans tick1→tick2 (1572864), not tick1→0→tick2 (which
+	// would read as 2621440).
+	n := NewNet("eth0", 1, false, metric.UnitRaw)
+	n.consume(mustRead(t, "netdev_tick1.txt"))
+	cells := n.consume(nil) // failed tick: zeros
+	for i, c := range cells {
+		if c.Raw != 0 {
+			t.Fatalf("failed tick cell %d Raw = %v, want 0", i, c.Raw)
+		}
+	}
+	cells = n.consume(mustRead(t, "netdev_tick2.txt"))
+	if cells[0].Raw != 1572864 {
+		t.Errorf("recovery recv Raw = %v, want 1572864 (delta over the outage)", cells[0].Raw)
+	}
+}
+
+func TestSwapFailedTickKeepsBaseline(t *testing.T) {
+	// Same for /proc/vmstat: pswpin 50 → (failed tick) → 75 must read as
+	// delta 25, not 75 (which a zeroed baseline would produce).
+	s := NewSwap(1)
+	s.consume([]byte("pswpin 50\npswpout 30\n"))
+	cells := s.consume(nil) // failed tick: zeros
+	if cells[0].Text != "    0" || cells[1].Text != "    0" {
+		t.Fatalf("failed tick = %q/%q, want two zeros", cells[0].Text, cells[1].Text)
+	}
+	cells = s.consume([]byte("pswpin 75\npswpout 42\n"))
+	if cells[0].Text != "   25" {
+		t.Errorf("recovery si = %q, want %q (delta over the outage)", cells[0].Text, "   25")
+	}
+}
+
 func TestSwapCounterResetClampsToZero(t *testing.T) {
 	s := NewSwap(1)
 	s.consume([]byte("pswpin 50\npswpout 30\n"))
