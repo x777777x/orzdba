@@ -124,6 +124,48 @@ func TestDailyFileRotatesNextDay(t *testing.T) {
 	}
 }
 
+func TestDailyFileRotateOpenFailureKeepsOldFile(t *testing.T) {
+	// Rotation target unwritable (here: the dated path is a directory):
+	// MaybeRotate must return false AND NOT advance the day — the P3 fix that
+	// previously set s.day on failure, silently skipping every retry for the
+	// rest of the day and dropping today's data into yesterday's file. The
+	// old file must keep receiving writes.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "o.log")
+	s, err := newDailyFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	today := time.Now()
+	tomorrow := today.AddDate(0, 0, 1)
+	tomorrowPath := p + "." + tomorrow.Format("2006-01-02")
+	// Make the target unopenable as a file.
+	if err := os.MkdirAll(tomorrowPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if s.MaybeRotate(tomorrow) {
+		t.Fatal("MaybeRotate to an unwritable target returned true, want false")
+	}
+	if s.day != today.Format("2006-01-02") {
+		t.Errorf("day advanced despite failed open: %q", s.day)
+	}
+	// A retry one tick later must still attempt the rotation (day unchanged).
+	if s.MaybeRotate(tomorrow) {
+		t.Fatal("retry after failed open returned true, want false")
+	}
+	// The old file still receives writes.
+	if _, err := s.Write([]byte("still-here\n")); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p + "." + today.Format("2006-01-02"))
+	if string(b) != "still-here\n" {
+		t.Errorf("old-file write lost: %q", string(b))
+	}
+}
+
 // TestTeeDoubleWrite verifies --also-stdout behavior: one Write reaches both
 // stdout and the file.
 func TestTeeDoubleWrite(t *testing.T) {
