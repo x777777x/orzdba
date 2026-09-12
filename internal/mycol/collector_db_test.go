@@ -78,6 +78,65 @@ func TestFetchErrorDegrades(t *testing.T) {
 	}
 }
 
+func TestDeltaClampOnCounterReset(t *testing.T) {
+	// mysqld restart: cumulative counters reset to ~0 between ticks, so
+	// cur < prev. The N1 guard must report delta 0 — never a negative rate.
+	resetMock()
+	mockDrv.rowsByQuery["SHOW GLOBAL STATUS"] = newRows(
+		[]string{"Variable_name", "Value"}, []string{"Com_select", "100"},
+	)
+	s := NewStatusSource(mockDB(), 1, time.Second)
+	s.Fetch()
+	mockDrv.rowsByQuery["SHOW GLOBAL STATUS"] = newRows(
+		[]string{"Variable_name", "Value"}, []string{"Com_select", "50"},
+	)
+	s.Fetch()
+	if got := s.Delta("Com_select"); got != 0 {
+		t.Errorf("Delta after counter reset = %d, want 0 (cur 50 < prev 100)", got)
+	}
+	if got := s.Rate("Com_select"); got != 0 {
+		t.Errorf("Rate after counter reset = %v, want 0", got)
+	}
+}
+
+func TestRateUsesRealWindowAfterFailures(t *testing.T) {
+	// fetch ok → fail ×2 → ok: the delta spans the whole outage, so Rate must
+	// divide by the real elapsed window (lastOK - prevFetch), not the fixed
+	// interval. Fix D1 made exactly this branch overstate rates ~2x when it
+	// was wrong — this test is its regression guard. Wall-clock gaps are
+	// simulated by rewinding lastOK/prevFetch (white-box) instead of sleeping.
+	resetMock()
+	mockDrv.rowsByQuery["SHOW GLOBAL STATUS"] = newRows(
+		[]string{"Variable_name", "Value"}, []string{"Com_select", "100"},
+	)
+	s := NewStatusSource(mockDB(), 1, time.Second)
+	s.Fetch()
+	firstOK := s.lastOK
+
+	// Two failed ticks: neither lastOK nor prevFetch may move.
+	resetMock()
+	mockDrv.errByQuery["SHOW GLOBAL STATUS"] = errors.New("connection lost")
+	s.Fetch()
+	s.Fetch()
+	if !s.lastOK.Equal(firstOK) {
+		t.Fatalf("failed fetch moved lastOK: %v → %v", firstOK, s.lastOK)
+	}
+
+	// Recovery: the stale sample shifts into prev → delta 500.
+	mockDrv.errByQuery = nil
+	mockDrv.rowsByQuery["SHOW GLOBAL STATUS"] = newRows(
+		[]string{"Variable_name", "Value"}, []string{"Com_select", "600"},
+	)
+	s.Fetch()
+	// Simulate a 5s outage window (back-to-back test fetches have ~0 elapsed).
+	now := time.Now()
+	s.lastOK = now
+	s.prevFetch = now.Add(-5 * time.Second)
+	if got := s.Rate("Com_select"); got != 100 { // 500 delta / 5s
+		t.Errorf("Rate across 5s outage = %v, want 100 (delta 500 / real window)", got)
+	}
+}
+
 // ---- SlaveStatus: column scanning + NULL + no-rows + error ----
 //
 // The mock has no SQL parser, so pre-8.4 servers are simulated by registering

@@ -78,6 +78,23 @@ func TestComCollect(t *testing.T) {
 	}
 }
 
+func TestComCommitMode(t *testing.T) {
+	// --tps-mode commit: TPS = Com_commit + Com_rollback, NOT ins+upd+del.
+	// This branch was once accepted-and-ignored (P2-3) — pin it.
+	cur := map[string]int64{
+		"Com_insert": 10, "Com_update": 20, "Com_delete": 30, "Com_select": 40,
+		"Com_commit": 7, "Com_rollback": 3,
+	}
+	cells := NewCom(newTestSource(cur, map[string]int64{}, nil), true).Collect()
+	// commit TPS = 7+3 = 10 (iud would show 60); sel = 40.
+	if cells[1].Text != "     40" {
+		t.Errorf("commit-mode sel = %q, want %q", cells[1].Text, "     40")
+	}
+	if cells[2].Text != "    10" || cells[2].Raw != 10 {
+		t.Errorf("commit-mode tps = %q/%v, want %q/10 (commit+rollback)", cells[2].Text, cells[2].Raw, "    10")
+	}
+}
+
 func TestComFirstTickZeros(t *testing.T) {
 	s := NewStatusSource(nil, 1, time.Second) // tick 0, no prev
 	cells := NewCom(s, false).Collect()
