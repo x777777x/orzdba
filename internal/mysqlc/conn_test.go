@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 func writeCNF(t *testing.T, content string) string {
@@ -42,6 +44,27 @@ func TestDSNUnixPrecedence(t *testing.T) {
 	c := &Config{User: "u", Password: "p", Host: "1.2.3.4", Port: 3306, Socket: "/tmp/x.sock", Timeout: time.Second}
 	if !strings.Contains(c.DSN(), "unix(/tmp/x.sock)") {
 		t.Errorf("socket should take precedence over host:port: %q", c.DSN())
+	}
+}
+
+func TestDSNPasswordSpecialCharsRoundTrip(t *testing.T) {
+	// DSN() builds the string with Sprintf and go-sql-driver parses it: the
+	// construction↔driver contract must survive passwords containing the DSN
+	// metacharacters @ : / ? & = (the driver takes the LAST '@' before the
+	// last '/' and splits user:pass at the FIRST ':'; '?' only starts the
+	// param section after the last '/'). A regression here would break auth
+	// silently for exactly those users. SafeDSN keeps the password out of the
+	// failure message.
+	c := &Config{User: "monitor", Password: `p@ss:wo/rd?x&y=z`, Host: "10.0.0.5", Port: 3307, Timeout: time.Second}
+	parsed, err := mysql.ParseDSN(c.DSN())
+	if err != nil {
+		t.Fatalf("ParseDSN(%s): %v", c.SafeDSN(), err)
+	}
+	if parsed.User != "monitor" || parsed.Passwd != `p@ss:wo/rd?x&y=z` {
+		t.Errorf("round trip lost credentials: user=%q pass=%q", parsed.User, parsed.Passwd)
+	}
+	if parsed.Addr != "10.0.0.5:3307" {
+		t.Errorf("Addr = %q, want 10.0.0.5:3307", parsed.Addr)
 	}
 }
 
