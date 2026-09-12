@@ -36,15 +36,17 @@ func zeroLoad() []metric.Cell {
 	}
 }
 
-// zeroRow returns a zero-valued row matching disk's current column layout for
-// every configured device. A normal row carries 8 numeric values per device
-// (the first cell packs r/s and w/s), so the zero row emits 8 — matching the
-// header and the --sep column count on both the non-full and full layouts.
+// zeroRow returns a zero-valued row matching disk's current cell layout for
+// every configured device. deviceCells emits 7 cells per device, the first
+// packing r/s and w/s (so the --sep column count is 8); the zero row mirrors
+// that shape exactly — 7 cells, first cell carrying two zero values — so a
+// degraded row aligns with the header in both the default and the --sep modes.
 func (d *Disk) zeroRow() []metric.Cell {
-	const n = 8
+	const n = 7
 	cells := make([]metric.Cell, 0, len(d.devices)*n)
 	for range d.devices {
-		for i := 0; i < n; i++ {
+		cells = append(cells, metric.Cell{Text: fmt.Sprintf("%7s%7s", "0", "0"), Color: metric.White})
+		for i := 1; i < n; i++ {
 			cells = append(cells, metric.Cell{Text: fmt.Sprintf("%7s", "0"), Color: metric.White})
 		}
 	}

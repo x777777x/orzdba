@@ -482,9 +482,13 @@ func TestDiskDegradeZeroDeltamsThenRecover(t *testing.T) {
 	if len(cells) != 7 {
 		t.Fatalf("degrade row = %d cells, want 7", len(cells))
 	}
+	// Every cell must be zero — the first packs r/s and w/s (two zero tokens),
+	// the rest are single zeros, matching deviceCells' 7-cell/8-column shape.
 	for i, c := range cells {
-		if c.Text != "      0" {
-			t.Errorf("degrade cell %d = %q, want zero cell", i, c.Text)
+		for _, f := range strings.Fields(c.Text) {
+			if f != "0" {
+				t.Errorf("degrade cell %d field = %q, want zero cell", i, f)
+			}
 		}
 	}
 
