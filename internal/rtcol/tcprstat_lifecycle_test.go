@@ -1,6 +1,7 @@
 package rtcol
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -155,6 +156,62 @@ func TestLastSampleEmptyAndMissing(t *testing.T) {
 	os.Remove(c.logPath)
 	if _, _, _, _, ok := c.lastSample(); ok {
 		t.Error("lastSample on missing file returned ok, want false")
+	}
+}
+
+func TestLastSampleTruncatesAndKeepsParsing(t *testing.T) {
+	// Two real-world interactions of the bounded-log truncate, previously
+	// untested:
+	//  1. file > tcprstatLogMax → lastSample must truncate AND still parse
+	//     the last line.
+	//  2. tcprstat inherits the SAME open file description, so its write
+	//     offset survives the parent's Truncate(0): the next child write
+	//     lands at the old offset, leaving a NUL hole whose bytes merge into
+	//     the first token of the first fresh line (the timestamp column).
+	// parseRTLine reads f[1]/f[4]/f[8]/f[11], so values must stay correct —
+	// a fragile-but-real property this test pins before anyone "fixes" the
+	// truncation. Emulates the child with a separate fd seeked to the stale
+	// offset (same open-file-description semantics: truncate does not reset
+	// it).
+	c := New(3306, "127.0.0.1")
+	withPaths(t, c)
+	line := "1234567890 150 50000 100 1200 1100 50 48000 1150 40 49000 1180 30\n"
+	var b bytes.Buffer
+	for b.Len() <= tcprstatLogMax {
+		b.WriteString(line)
+	}
+	preTruncateSize := int64(b.Len())
+	if err := os.WriteFile(c.logPath, b.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Truncate fires; the last line still parses.
+	count, avg, avg95, avg99, ok := c.lastSample()
+	if !ok || count != 150 || avg != 1200 {
+		t.Fatalf("after truncate: ok=%v count=%d avg=%d, want ok with 150/1200", ok, count, avg)
+	}
+	if fi, err := os.Stat(c.logPath); err != nil || fi.Size() != 0 {
+		t.Fatalf("truncate did not reset the file: size=%v err=%v", fi, err)
+	}
+
+	// 2. Child writes at its stale offset (emulated).
+	f, err := os.OpenFile(c.logPath, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(preTruncateSize, 0); err != nil {
+		t.Fatal(err)
+	}
+	fresh := "1234567891 160 51000 110 1300 1200 60 49000 1250 50 50000 1280 31\n"
+	if _, err := f.WriteString(fresh); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	count, avg, avg95, avg99, ok = c.lastSample()
+	if !ok || count != 160 || avg != 1300 || avg95 != 1250 || avg99 != 1280 {
+		t.Fatalf("parse across the NUL hole: ok=%v count=%d avg=%d 95=%d 99=%d, want 160/1300/1250/1280",
+			ok, count, avg, avg95, avg99)
 	}
 }
 

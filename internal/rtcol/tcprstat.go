@@ -241,7 +241,10 @@ func (c *Collector) lastSample() (count, avg, avg95, avg99 int64, ok bool) {
 // line, and truncates the file once it exceeds tcprstatLogMax (P1-2: bounds
 // both disk usage and per-tick read cost). Caller holds c.mu.
 func (c *Collector) lastSampleLocked() (count, avg, avg95, avg99 int64, ok bool) {
-	f, err := os.Open(c.logPath)
+	// O_RDWR: the bounded-log truncate below needs a writable fd. Opened
+	// read-only, Truncate failed with EBADF and the error was swallowed —
+	// the log grew unbounded (found by TestLastSampleTruncatesAndKeepsParsing).
+	f, err := os.OpenFile(c.logPath, os.O_RDWR, 0)
 	if err != nil {
 		return 0, 0, 0, 0, false
 	}
@@ -271,7 +274,14 @@ func (c *Collector) lastSampleLocked() (count, avg, avg95, avg99 int64, ok bool)
 	if last == "" {
 		return 0, 0, 0, 0, false
 	}
-	// Truncate the file to keep it bounded (keep the tail window we just read).
+	// Truncate the file to keep it bounded. NOTE: this drops ALL history, not
+	// just the tail we just read, and the child's inherited write offset
+	// survives the truncation — its next write lands at the old offset,
+	// leaving a NUL hole that merges into the FIRST token of the first fresh
+	// line. That token is the timestamp column, which parseRTLine ignores, so
+	// count/avg/95/99 stay correct. TestLastSampleTruncatesAndKeepsParsing
+	// locks this interaction; change the truncate logic only together with
+	// that test.
 	if fi.Size() > tcprstatLogMax {
 		_ = f.Truncate(0)
 		_, _ = f.Seek(0, 0)
