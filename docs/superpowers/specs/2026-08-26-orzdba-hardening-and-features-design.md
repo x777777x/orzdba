@@ -120,7 +120,7 @@ type Cell struct {
 - **每 tick 一次 `/proc` 全量读取**：所有采集器复用同一次 `os.ReadFile` 结果（多磁盘/多网卡不重复读文件）；每 tick 至多 1 条 `SHOW GLOBAL STATUS` + 可选 1 条 `SHOW ENGINE INNODB STATUS`/`SHOW SLAVE STATUS`。
 - **MySQL 连接**：单连接 `MaxOpenConns=1`；所有查询 `context.WithTimeout(mysqlTimeout)`（默认 1s），杜绝连接堆积；`SetConnMaxLifetime(0)` 保持长连接，断连由驱动自动重建。
 - **tcprstat 日志**：尾部读 + 阈值 truncate，防无界增长与每 tick O(n) 全量读。
-- **凭证安全**：保持不落 argv（`--mysql-pass` 仍为调试专用）；日志 0600；锁文件 0600。
+- **凭证安全**：密码不落 argv——CLI 无密码参数，凭证来自 `/etc/orzdba.cnf`（orzdba 专属，启动强制 0600 + 属主校验，不满足拒绝启动）或 my.cnf/环境变量；日志 0600；锁文件 0600。
 - **数值安全**：所有差值用 int64 防溢出；`/proc` 解析失败降级 0 不 panic；`--unit` 下 Raw 为纯数值无后缀。
 
 ## 10. 测试

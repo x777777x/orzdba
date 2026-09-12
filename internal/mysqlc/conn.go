@@ -47,8 +47,10 @@ type ResolveOpts struct {
 }
 
 // DefaultCNFSearch is the my.cnf search order when no explicit defaults-file is
-// given (plan §8.1).
-var DefaultCNFSearch = []string{"/etc/my.cnf", "/etc/mysql/my.cnf", expandHome("~/.my.cnf")}
+// given (plan §8.1). /etc/orzdba.cnf is orzdba's own credential file and heads
+// the search; the my.cnf entries are read as a compatibility courtesy and keep
+// their existing warn-only posture (CheckStrictFile governs orzdba.cnf).
+var DefaultCNFSearch = []string{StrictCNFPath, "/etc/my.cnf", "/etc/mysql/my.cnf", expandHome("~/.my.cnf")}
 
 // ResolveCredentials merges sources low→high so higher priority wins per
 // field (plan §8.1). host/port/socket come from my.cnf or CLI; user/password

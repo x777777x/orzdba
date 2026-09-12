@@ -54,7 +54,6 @@ type config struct {
 	hostSet           bool
 	portSet           bool
 	mysqlUser         string
-	mysqlPass         string
 	mysqlDefaultsFile string
 	mysqlDefaultsGrp  string
 	mysqlTimeout      time.Duration
@@ -134,7 +133,6 @@ func parseArgs(argv []string) (*config, error) {
 	fs.StringVarP(&c.socket, "socket", "S", "", "")
 	fs.StringVarP(&c.host, "host", "H", "127.0.0.1", "")
 	fs.StringVar(&c.mysqlUser, "mysql-user", "", "")
-	fs.StringVar(&c.mysqlPass, "mysql-pass", "", "")
 	fs.StringVar(&c.mysqlDefaultsFile, "mysql-defaults-file", "", "")
 	fs.StringVar(&c.mysqlDefaultsGrp, "mysql-defaults-group", "client", "")
 	fs.DurationVar(&c.mysqlTimeout, "mysql-timeout", time.Second, "")
@@ -328,7 +326,6 @@ var longFlagNames = map[string]bool{
 	"ip":                   true,
 	"logfile_by_day":       true,
 	"mysql-user":           true,
-	"mysql-pass":           true,
 	"mysql-timeout":        true,
 	"mysql-tls":            true,
 	"mysql-defaults-file":  true,

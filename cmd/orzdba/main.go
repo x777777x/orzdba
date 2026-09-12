@@ -163,8 +163,27 @@ func main() {
 	// (M4 subset); innodb/slave/semi arrive in M5/M6.
 	var status *mycol.StatusSource
 	if cfg.mysql {
+		// Strict credential-file check. /etc/orzdba.cnf (when present) and an
+		// explicit --mysql-defaults-file are orzdba-owned files: they must be
+		// 0600 and owned by the running user or root, or orzdba refuses to
+		// start. A password that any local user can read is worse than no
+		// password — a monitoring tool running as root on a DB host must not
+		// be the thing that leaks the DB credentials. (Shared my.cnf files
+		// keep their existing warn-only posture.)
+		strictPath := cfg.mysqlDefaultsFile
+		if strictPath == "" {
+			if _, err := os.Stat(mysqlc.StrictCNFPath); err == nil {
+				strictPath = mysqlc.StrictCNFPath
+			}
+		}
+		if strictPath != "" {
+			if err := mysqlc.CheckStrictFile(strictPath); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+				os.Exit(1)
+			}
+		}
 		opts := mysqlc.ResolveOpts{
-			CLIUser: cfg.mysqlUser, CLIPass: cfg.mysqlPass,
+			CLIUser:      cfg.mysqlUser,
 			CLISocket:    cfg.socket,
 			DefaultsFile: cfg.mysqlDefaultsFile, DefaultsGroup: cfg.mysqlDefaultsGrp,
 			Timeout: cfg.mysqlTimeout, TLS: cfg.mysqlTLS,
@@ -603,11 +622,16 @@ Command line options :
    -S,--socket         Socket file to use for mysql connection.
    -H,--host           MySQL host (default 127.0.0.1).
    --mysql-user        MySQL user.
-   --mysql-pass        MySQL password (plaintext, debug only).
-   --mysql-defaults-file  Path to a my.cnf to read instead of the default search.
+   --mysql-defaults-file  Path to a credential file to read instead of the search.
    --mysql-defaults-group my.cnf section (default client).
    --mysql-timeout     SQL/connect timeout (default 1s).
    --mysql-tls         Enable TLS.
+
+   Credentials: read from /etc/orzdba.cnf (orzdba-owned; must be 0600 and
+   owned by the running user or root, otherwise orzdba refuses to start),
+   then /etc/my.cnf, /etc/mysql/my.cnf, ~/.my.cnf, then env. The CLI takes
+   no password — a password on the command line is visible to every local
+   user in ps(1) and was removed.
 
    -com                Print MySQL Status(Com_select,Com_insert,Com_update,Com_delete).
    -hit                Print Innodb Hit%. (--hit full for 5-column extended hit)

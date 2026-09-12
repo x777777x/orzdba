@@ -3,6 +3,7 @@ package mysqlc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -156,5 +157,62 @@ func TestCheckFileMode(t *testing.T) {
 	}
 	if w := CheckFileMode(loose); w == "" {
 		t.Error("0644 file did not warn, want a credential-leak warning")
+	}
+}
+
+// TestCheckStrictFile: the orzdba-owned credential file must be 0600 AND owned
+// by the running user (or root); any violation is a refusal, not a warning.
+func TestCheckStrictFile(t *testing.T) {
+	dir := t.TempDir()
+
+	ok := filepath.Join(dir, "ok.cnf")
+	if err := os.WriteFile(ok, []byte("[client]\nuser=x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckStrictFile(ok); err != nil {
+		t.Errorf("0600 file refused: %v", err)
+	}
+
+	loose := filepath.Join(dir, "loose.cnf")
+	if err := os.WriteFile(loose, []byte("[client]\nuser=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckStrictFile(loose); err == nil {
+		t.Error("0644 file accepted, want refusal")
+	} else if !strings.Contains(err.Error(), "chmod 600") {
+		t.Errorf("0644 refusal should hint chmod 600, got: %v", err)
+	}
+
+	// Owner mismatch: a file owned by someone else must be refused (uid 0 is
+	// always accepted). Chown to an impossible owner only when the platform
+	// reports owners; otherwise skip — Windows cannot produce a mismatch.
+	if _, ok := fileOwnerUID(ok); ok {
+		other := filepath.Join(dir, "other.cnf")
+		if err := os.WriteFile(other, []byte("[client]\nuser=x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Find any uid that is neither us nor root.
+		uid := os.Geteuid()
+		target := 1
+		if uid == 1 {
+			target = 2
+		}
+		if target != 0 && target != uid {
+			if err := os.Chown(other, target, -1); err == nil {
+				if err := CheckStrictFile(other); err == nil {
+					t.Error("file owned by another uid accepted, want refusal")
+				} else if !strings.Contains(err.Error(), "chown") {
+					t.Errorf("owner refusal should hint chown, got: %v", err)
+				}
+			}
+		}
+	}
+}
+
+// TestStrictCNFPathHeadsSearch: /etc/orzdba.cnf must precede the shared my.cnf
+// entries so orzdba's own credentials win the merge.
+func TestStrictCNFPathHeadsSearch(t *testing.T) {
+	if DefaultCNFSearch[0] != StrictCNFPath {
+		t.Errorf("DefaultCNFSearch[0] = %q, want %q (orzdba.cnf wins)", DefaultCNFSearch[0], StrictCNFPath)
 	}
 }
