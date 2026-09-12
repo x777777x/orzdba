@@ -1,0 +1,59 @@
+---
+# Full deployment: binary + credential file + systemd unit + start.
+# (First-time install and re-deploy of an unchanged config.)
+
+- name: Create log directory
+  ansible.builtin.file:
+    path: "{{ orzdba_log_dir }}"
+    state: directory
+    owner: "{{ orzdba_service_user }}"
+    group: "{{ orzdba_service_group }}"
+    mode: "0750"
+
+- name: Install orzdba binary
+  ansible.builtin.copy:
+    src: "{{ orzdba_bin }}"
+    dest: "{{ orzdba_install_dir }}/orzdba"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Verify installed binary checksum
+  ansible.builtin.shell: "sha256sum {{ orzdba_install_dir }}/orzdba"
+  register: orzdba_installed_sha
+  changed_when: false
+  when: orzdba_bin_sha256 | length > 0
+  failed_when: >-
+    orzdba_bin_sha256 | length > 0 and
+    orzdba_installed_sha.stdout.split()[0] != orzdba_bin_sha256
+
+- name: Install credential file (0600, orzdba-owned — orzdba refuses to start otherwise)
+  ansible.builtin.template:
+    src: orzdba.cnf.j2
+    dest: "{{ orzdba_config_path }}"
+    owner: "{{ orzdba_service_user }}"
+    group: "{{ orzdba_service_group }}"
+    mode: "0600"
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: orzdba.service.j2
+    dest: "/etc/systemd/system/{{ orzdba_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: orzdba_unit
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: orzdba_unit.changed
+
+- name: Enable and start orzdba
+  ansible.builtin.systemd:
+    name: "{{ orzdba_service_name }}"
+    enabled: true
+    state: started
+
+- name: Health check
+  ansible.builtin.include_tasks: health.yml

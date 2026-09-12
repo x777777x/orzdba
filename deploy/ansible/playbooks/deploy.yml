@@ -1,0 +1,29 @@
+---
+# First-time deployment: binary, /etc/orzdba.cnf (0600), systemd unit, MySQL
+# monitoring account (optional), and service start.
+#
+# Usage:
+#   ansible-playbook -i inventory playbooks/deploy.yml
+#   ansible-playbook -i inventory --ask-vault-pass playbooks/deploy.yml   (vault)
+#
+# Sizing/serial: full deploy touches every host in parallel (no rolling needed
+# on first install — there is no running service to protect yet).
+
+- name: Deploy orzdba to database servers
+  hosts: dbservers
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: orzdba
+      tasks_from: mysql-user
+      when: orzdba_create_mysql_user | default(false)
+
+- name: Install and start orzdba
+  hosts: dbservers
+  gather_facts: false
+  become: true
+
+  roles:
+    - role: orzdba
+      tasks_from: deploy

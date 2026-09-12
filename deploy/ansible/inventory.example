@@ -1,0 +1,7 @@
+[dbservers]
+db1.example.com   ansible_user=root
+db2.example.com   ansible_user=root
+db3.example.com   ansible_user=root
+
+# [dbservers:vars]
+# orzdba_mysql_password: "..."   # prefer group_vars/all.vault.yml (ansible-vault)

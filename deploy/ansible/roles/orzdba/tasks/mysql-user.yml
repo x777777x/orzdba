@@ -1,0 +1,32 @@
+---
+# Optional: create the minimal-privilege MySQL monitoring account.
+#
+# Grants only what orzdba's collectors need:
+#   PROCESS              -> SHOW ENGINE INNODB STATUS (innodb_status)
+#   REPLICATION CLIENT   -> SHOW SLAVE STATUS / REPLICA STATUS
+# No SELECT/SHOW DATABASES on business data; a leaked password is bounded to
+# read-only server state. Requires an admin connection from the control node
+# (orzdba_mysql_admin_user / orzdba_mysql_admin_password) and the mysql client
+# installed there.
+
+- name: Create minimal-privilege monitoring account
+  community.mysql.mysql_query:
+    login_user: "{{ orzdba_mysql_admin_user }}"
+    login_password: "{{ orzdba_mysql_admin_password }}"
+    login_host: "{{ orzdba_mysql_host }}"
+    login_port: "{{ orzdba_mysql_port }}"
+    query: >-
+      CREATE USER IF NOT EXISTS '{{ orzdba_mysql_user }}'@'localhost'
+      IDENTIFIED BY '{{ orzdba_mysql_password }}';
+  when: orzdba_create_mysql_user
+
+- name: Grant monitoring privileges (idempotent)
+  community.mysql.mysql_query:
+    login_user: "{{ orzdba_mysql_admin_user }}"
+    login_password: "{{ orzdba_mysql_admin_password }}"
+    login_host: "{{ orzdba_mysql_host }}"
+    login_port: "{{ orzdba_mysql_port }}"
+    query:
+      - "GRANT {{ orzdba_mysql_grants }} ON *.* TO '{{ orzdba_mysql_user }}'@'localhost'"
+      - "FLUSH PRIVILEGES"
+  when: orzdba_create_mysql_user

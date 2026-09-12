@@ -1,0 +1,16 @@
+# orzdba's own credential file.
+#
+# This file is orzdba-owned: orzdba REFUSES to start unless it is 0600 and
+# owned by the running user or root (the playbook enforces both). Never widen
+# its permissions to share it with another tool — create a separate file for
+# those. The password here is the only plaintext copy on the host; keep the
+# host and its backups out of untrusted hands.
+[client]
+user={{ orzdba_mysql_user }}
+password={{ orzdba_mysql_password }}
+{% if orzdba_mysql_socket %}
+socket={{ orzdba_mysql_socket }}
+{% else %}
+host={{ orzdba_mysql_host }}
+port={{ orzdba_mysql_port }}
+{% endif %}

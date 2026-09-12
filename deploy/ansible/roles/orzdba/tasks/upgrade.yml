@@ -1,0 +1,59 @@
+---
+# Rolling upgrade: swap the binary, restart, health-check; on failure restore
+# the previous binary and restart it.
+#
+# Run via playbooks/upgrade.yml which sets serial={{ orzdba_rollout_batch_size }}
+# so the play advances one batch of hosts at a time — the DB fleet keeps
+# monitoring coverage on the untouched hosts while a batch is upgraded.
+
+- name: Record current binary hash (for rollback verification)
+  ansible.builtin.shell: "sha256sum {{ orzdba_install_dir }}/orzdba"
+  register: orzdba_old_sha
+  changed_when: false
+
+- name: Back up the running binary
+  ansible.builtin.copy:
+    src: "{{ orzdba_install_dir }}/orzdba"
+    dest: "{{ orzdba_install_dir }}/orzdba.{{ orzdba_version }}.bak"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Upgrade block
+  block:
+    - name: Install new binary
+      ansible.builtin.copy:
+        src: "{{ orzdba_bin }}"
+        dest: "{{ orzdba_install_dir }}/orzdba"
+        owner: root
+        group: root
+        mode: "0755"
+      register: orzdba_new_bin
+
+    - name: Restart orzdba
+      ansible.builtin.systemd:
+        name: "{{ orzdba_service_name }}"
+        state: restarted
+
+    - name: Health check the new build
+      ansible.builtin.include_tasks: health.yml
+
+  rescue:
+    - name: ROLLBACK — restore the previous binary
+      ansible.builtin.copy:
+        src: "{{ orzdba_install_dir }}/orzdba.{{ orzdba_version }}.bak"
+        dest: "{{ orzdba_install_dir }}/orzdba"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: ROLLBACK — restart with the previous binary
+      ansible.builtin.systemd:
+        name: "{{ orzdba_service_name }}"
+        state: restarted
+
+    - name: ROLLBACK — fail loudly (operator must investigate)
+      ansible.builtin.fail:
+        msg: "orzdba upgrade to {{ orzdba_version }} failed on {{ inventory_hostname }}; previous binary restored and restarted"

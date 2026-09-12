@@ -1,0 +1,13 @@
+---
+# Stop orzdba on the fleet.
+
+- name: Stop orzdba
+  hosts: dbservers
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Stop and disable orzdba service
+      ansible.builtin.systemd:
+        name: "{{ orzdba_service_name }}"
+        state: stopped
+        enabled: false

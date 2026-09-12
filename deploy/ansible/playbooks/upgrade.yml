@@ -1,0 +1,25 @@
+---
+# Rolling upgrade of the orzdba binary.
+#
+# Advances the fleet in batches of {{ orzdba_rollout_batch_size }} hosts
+# (serial): for each batch — back up the running binary, install the new one,
+# restart, health-check (fresh log line within the timeout). If the new build
+# fails health, the batch's binary is restored and restarted, the play stops,
+# and the remaining hosts are left on the previous version.
+#
+# Usage (point orzdba_bin at the new artifact):
+#   ansible-playbook -i inventory -e orzdba_bin=../releases/orzdba-linux-amd64-new \
+#                    -e orzdba_version=1.1.0 playbooks/upgrade.yml
+#
+# To roll out 5 hosts at a time:
+#   ... -e orzdba_rollout_batch_size=5 playbooks/upgrade.yml
+
+- name: Rolling upgrade orzdba
+  hosts: dbservers
+  gather_facts: false
+  become: true
+  serial: "{{ orzdba_rollout_batch_size }}"
+
+  roles:
+    - role: orzdba
+      tasks_from: upgrade

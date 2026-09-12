@@ -1,0 +1,20 @@
+[Unit]
+Description=orzdba MySQL & host monitor
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+# Front-of-line mode (no --daemon): systemd owns the process lifecycle.
+Type=simple
+User={{ orzdba_service_user }}
+Group={{ orzdba_service_group }}
+ExecStart={{ orzdba_install_dir }}/orzdba {{ orzdba_args }} -L {{ orzdba_log_dir }}/orzdba.log -logfile_by_day
+Restart=on-failure
+RestartSec=5
+# Data rows go to the daily logfile; stderr diagnostics land in journald.
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

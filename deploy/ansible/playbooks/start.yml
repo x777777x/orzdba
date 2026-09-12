@@ -1,0 +1,18 @@
+---
+# Start orzdba on the fleet (after a stop, or to recover from manual downtime).
+
+- name: Start orzdba
+  hosts: dbservers
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Start orzdba service
+      ansible.builtin.systemd:
+        name: "{{ orzdba_service_name }}"
+        state: started
+        enabled: true
+
+    - name: Health check
+      ansible.builtin.include_role:
+        name: orzdba
+        tasks_from: health

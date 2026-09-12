@@ -1,0 +1,35 @@
+---
+# Health check after a start/restart: the unit must be active and a fresh data
+# row must appear in the daily logfile within the timeout. A monitoring tool
+# that is "running" but producing nothing is exactly the failure we must not
+# ship — fail so an upgrade's rollback (or the operator) can react.
+
+- name: Ensure orzdba unit is active
+  ansible.builtin.systemd:
+    name: "{{ orzdba_service_name }}"
+    state: started
+  register: orzdba_svc
+
+- name: Read current size of the newest daily logfile
+  ansible.builtin.shell: |
+    latest=$(ls -t {{ orzdba_log_dir }}/orzdba.log.* 2>/dev/null | head -1)
+    [ -n "$latest" ] && stat -c %s "$latest" || echo 0
+  register: orzdba_log_before
+  changed_when: false
+
+- name: Wait for a fresh data row
+  ansible.builtin.shell: |
+    before={{ orzdba_log_before.stdout }}
+    for i in $(seq 1 {{ orzdba_health_check_seconds }}); do
+      latest=$(ls -t {{ orzdba_log_dir }}/orzdba.log.* 2>/dev/null | head -1)
+      if [ -n "$latest" ]; then
+        s=$(stat -c %s "$latest" 2>/dev/null || echo 0)
+        if [ "$s" -gt "$before" ]; then echo "healthy"; exit 0; fi
+      fi
+      sleep 1
+    done
+    echo "orzdba produced no new log line within {{ orzdba_health_check_seconds }}s"
+    exit 1
+  register: orzdba_health
+  changed_when: false
+  failed_when: orzdba_health.rc != 0

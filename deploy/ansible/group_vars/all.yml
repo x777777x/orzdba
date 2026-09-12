@@ -1,0 +1,45 @@
+---
+# orzdba deployment — group variables.
+#
+# SENSITIVE VALUES: put orzdba_mysql_password and (if used) the admin password
+# in an ansible-vault file, NOT here in plaintext:
+#
+#   ansible-vault create group_vars/all.vault.yml
+#       orzdba_mysql_password: "the-real-secret"
+#       orzdba_mysql_admin_password: "admin-secret"
+#
+# The playbook renders these into /etc/orzdba.cnf and enforces 0600 + correct
+# owner, so the only place the plaintext password lives on the host is the
+# root-readable credential file (and the process memory while running).
+
+# --- binary ---
+orzdba_version: "1.0.0"                                  # used in upgrade logs
+orzdba_release_dir: "{{ playbook_dir }}/../releases"     # where binaries live
+orzdba_bin: "{{ orzdba_release_dir }}/orzdba-linux-amd64" # new binary for deploy/upgrade
+orzdba_bin_sha256: ""                                    # optional: verify checksum
+orzdba_install_dir: /usr/local/bin
+orzdba_service_name: orzdba
+orzdba_service_user: root                                # see deploy README re: dedicated user
+orzdba_service_group: "{{ 'root' if orzdba_service_user == 'root' else orzdba_service_user }}"
+
+# --- runtime ---
+orzdba_log_dir: /var/log/orzdba
+orzdba_args: "-mysql -i 1 -C 0"                          # change per monitoring needs
+
+# --- credential file (/etc/orzdba.cnf) ---
+orzdba_config_path: /etc/orzdba.cnf
+orzdba_mysql_user: orzdba
+orzdba_mysql_password: ""                                # OVERRIDE in vault
+orzdba_mysql_host: "127.0.0.1"
+orzdba_mysql_port: 3306
+orzdba_mysql_socket: ""                                  # set to prefer unix socket over host:port
+
+# --- optional: create the minimal-privilege MySQL monitoring account ---
+orzdba_create_mysql_user: false
+orzdba_mysql_admin_user: root
+orzdba_mysql_admin_password: ""                          # OVERRIDE in vault (ansible control node)
+orzdba_mysql_grants: "PROCESS,REPLICATION CLIENT"        # SHOW ENGINE INNODB STATUS + SHOW SLAVE STATUS
+
+# --- rolling upgrade ---
+orzdba_rollout_batch_size: 1                             # hosts per upgrade batch (serial)
+orzdba_health_check_seconds: 3                           # max seconds to wait for a fresh log line
