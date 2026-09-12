@@ -154,7 +154,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
 		}
-		renderer.AddSys(syscol.NewDisk(cpu, devices, ncpu, cfg.full, unit))
+		renderer.AddSys(syscol.NewDisk(cpu, devices, ncpu, cfg.full, unit, cfg.interval))
 	}
 
 	// MySQL collectors. Open one long-lived connection (plan §9.3) and share a

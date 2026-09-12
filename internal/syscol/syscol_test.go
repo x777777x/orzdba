@@ -177,7 +177,7 @@ func TestParseDiskStatPartition(t *testing.T) {
 
 func TestDiskSecondTick(t *testing.T) {
 	cpu := NewCPU(2, false, false)
-	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw, 1)
 	// Interleave cpu+disk per tick so deltams reflects the right cpu diffs.
 	cpu.consume(mustRead(t, "stat_tick1.txt"))
 	d.consume(mustRead(t, "diskstats_tick1.txt")) // first tick (since-boot), not asserted
@@ -280,7 +280,7 @@ func TestParseDiskStatsMulti(t *testing.T) {
 
 func TestDiskMultiSecondTick(t *testing.T) {
 	cpu := NewCPU(2, false, false)
-	d := NewDisk(cpu, []string{"sda", "sdb"}, 2, false, metric.UnitRaw)
+	d := NewDisk(cpu, []string{"sda", "sdb"}, 2, false, metric.UnitRaw, 1)
 	cpu.consume(mustRead(t, "stat_tick1.txt"))
 	d.consume(mustRead(t, "diskstats_multi_tick1.txt")) // baseline
 	cpu.consume(mustRead(t, "stat_tick2.txt"))
@@ -453,7 +453,7 @@ func TestDiskCounterResetClampsToZero(t *testing.T) {
 	// Device removed and re-added: every diskstats counter for sda resets to
 	// 0; all iostat columns must clamp to 0 (busy included), never negative.
 	cpu := NewCPU(2, false, false)
-	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw, 1)
 	cpu.consume(mustRead(t, "stat_tick1.txt"))
 	d.consume(mustRead(t, "diskstats_tick1.txt"))
 	cpu.consume(mustRead(t, "stat_tick2.txt"))
@@ -475,7 +475,7 @@ func TestDiskDegradeZeroDeltamsThenRecover(t *testing.T) {
 	// division by zero — AND refresh prev, so the recovery ticks compute
 	// real rates instead of a since-boot spike.
 	cpu := NewCPU(2, false, false)
-	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw)
+	d := NewDisk(cpu, []string{"sda"}, 2, false, metric.UnitRaw, 1)
 
 	// Degrade tick: no CPU sample yet → deltams() == 0.
 	cells := d.consume(mustRead(t, "diskstats_tick1.txt"))

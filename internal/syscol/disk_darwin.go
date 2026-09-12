@@ -88,6 +88,7 @@ import "C"
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 
 	"orzdba/internal/metric"
@@ -99,12 +100,26 @@ import (
 // counters, so queue/await/svctm/%util are 0 and only r/s, w/s, rkB/s, wkB/s
 // carry real values (documented in README).
 //
-// Like the Linux disk, prev is zero-initialized so the first tick yields
-// since-boot averages.
+// macOS cpu_ticks are not Linux jiffies, so there is no deltams equivalent:
+// rates divide each counter delta by the real elapsed wall-clock window
+// (rateDenom, the same base the net collectors use). The first successful tick
+// only records the baseline and prints zeros — there is no previous sample to
+// rate against (matching the net/swap first-tick guard); never a since-boot
+// spike.
 type Disk struct {
-	devices []string
-	full    bool
-	prev    map[string]diskStat
+	devices  []string
+	interval float64
+	full     bool
+	notFirst bool
+	prev     map[string]diskStat
+	// last is the wall-clock of the previous successful sample. It (and prev)
+	// survive a failed tick so the recovery sample rates over the true outage
+	// window instead of a since-boot spike.
+	last time.Time
+	// nowFn and readFn are test seams (mirroring the Linux net's nowFn). A nil
+	// readFn means the IOKit-backed readStats.
+	nowFn  func() time.Time
+	readFn func() map[string]diskStat
 }
 
 // diskStat holds the IOKit counters the formula needs (byte/op deltas).
@@ -116,10 +131,11 @@ type diskStat struct {
 // NewDisk returns a disk collector for the given device list. cpu/ncpu are
 // retained in the signature for API compatibility with the Linux version but
 // unused on macOS (D5: removed the dead fields — %util stays 0 here). full
-// enables extended columns; unit is likewise unused.
-func NewDisk(_ *CPU, devices []string, _ int, full bool, _ metric.UnitMode) *Disk {
-	return &Disk{devices: devices, full: full,
-		prev: make(map[string]diskStat, len(devices))}
+// enables extended columns; unit is likewise unused. interval (seconds) is the
+// rate denominator floor.
+func NewDisk(_ *CPU, devices []string, _ int, full bool, _ metric.UnitMode, interval int) *Disk {
+	return &Disk{devices: devices, interval: float64(interval), full: full,
+		prev: make(map[string]diskStat, len(devices)), nowFn: time.Now}
 }
 
 func (*Disk) Name() string { return "disk" }
@@ -152,22 +168,41 @@ func (d *Disk) Headline() (string, string) {
 
 // Collect reads IOKit disk statistics and formats the columns for each device.
 func (d *Disk) Collect() []metric.Cell {
-	stats := d.readStats()
-	// If the platform data source is unavailable, degrade to zeros.
+	now := d.nowFn()
+	denom := rateDenom(d.last, d.interval, now)
+	stats := d.sample()
 	if len(stats) == 0 {
+		// IOKit temporarily unavailable: zeros for this tick, but keep the
+		// baseline and the sample clock — the recovery tick then rates over
+		// the real outage window (delta / true elapsed) instead of a
+		// since-boot spike.
+		return d.zeroRow()
+	}
+	d.last = now
+	if !d.notFirst {
+		// First successful sample: record the baseline, print zeros.
 		for _, dev := range d.devices {
-			d.prev[dev] = diskStat{}
+			d.prev[dev] = stats[dev]
 		}
+		d.notFirst = true
 		return d.zeroRow()
 	}
 	cells := make([]metric.Cell, 0, len(d.devices)*7)
 	for _, dev := range d.devices {
 		cur := stats[dev]
 		p := d.prev[dev]
-		cells = append(cells, d.deviceCells(dev, cur, p)...)
+		cells = append(cells, d.deviceCells(cur, p, denom)...)
 		d.prev[dev] = cur
 	}
 	return cells
+}
+
+// sample returns the current per-device counters, preferring the test seam.
+func (d *Disk) sample() map[string]diskStat {
+	if d.readFn != nil {
+		return d.readFn()
+	}
+	return d.readStats()
 }
 
 // diskSample is one whole disk's BSD name plus its IOKit counters.
@@ -224,17 +259,22 @@ func (d *Disk) readStats() map[string]diskStat {
 
 // deviceCells computes the iostat fields for one device. On macOS only
 // r/s, w/s, rkB/s, wkB/s carry real values; queue/await/svctm/%iow/%util are 0.
-func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
-	rdBytes := clamp0(int64(cur.rdBytes) - int64(prev.rdBytes))
-	wrBytes := clamp0(int64(cur.wrBytes) - int64(prev.wrBytes))
-	rdOps := clamp0(int64(cur.rdOps) - int64(prev.rdOps))
-	wrOps := clamp0(int64(cur.wrOps) - int64(prev.wrOps))
+// Counter deltas are normalized by the real elapsed window (seconds) so the
+// columns are per-second regardless of the sampling interval. Byte columns
+// carry bytes/s in Raw (ES-friendly); the display is KiB/s.
+func (d *Disk) deviceCells(cur, prev diskStat, denom float64) []metric.Cell {
+	rdIosS := float64(clamp0(int64(cur.rdOps)-int64(prev.rdOps))) / denom
+	wrIosS := float64(clamp0(int64(cur.wrOps)-int64(prev.wrOps))) / denom
+	rdBytesS := float64(clamp0(int64(cur.rdBytes)-int64(prev.rdBytes))) / denom
+	wrBytesS := float64(clamp0(int64(cur.wrBytes)-int64(prev.wrBytes))) / denom
+	rkibs := rdBytesS / 1024
+	wkibs := wrBytesS / 1024
 
 	if !d.full {
 		return []metric.Cell{
-			{Text: fmt.Sprintf("%7.1f%7.1f", float64(rdOps), float64(wrOps)), Raw: float64(rdOps), Color: metric.White},
-			{Text: fmt.Sprintf("%8.1f", float64(rdBytes)/1024), Raw: float64(rdBytes), Color: diskBytesColor(float64(rdBytes) / 1024)},
-			{Text: fmt.Sprintf(" %8.1f", float64(wrBytes)/1024), Raw: float64(wrBytes), Color: diskBytesColor(float64(wrBytes) / 1024)},
+			{Text: fmt.Sprintf("%7.1f%7.1f", rdIosS, wrIosS), Raw: rdIosS, Color: metric.White},
+			{Text: fmt.Sprintf("%8.1f", rkibs), Raw: rdBytesS, Color: diskBytesColor(rkibs)},
+			{Text: fmt.Sprintf(" %8.1f", wkibs), Raw: wrBytesS, Color: diskBytesColor(wkibs)},
 			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // queue
 			{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // await
 			{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // svctm
@@ -243,9 +283,9 @@ func (d *Disk) deviceCells(_ string, cur, prev diskStat) []metric.Cell {
 	}
 	// Full mode: r/s w/s rkB/s wkB/s avgqu-sz avgrq-sz %iow %util.
 	return []metric.Cell{
-		{Text: fmt.Sprintf(" %5.1f%6.1f", float64(rdOps), float64(wrOps)), Raw: float64(rdOps), Color: metric.White},
-		{Text: fmt.Sprintf(" %6.1f", float64(rdBytes)/1024), Raw: float64(rdBytes), Color: diskBytesColor(float64(rdBytes) / 1024)},
-		{Text: fmt.Sprintf(" %6.1f", float64(wrBytes)/1024), Raw: float64(wrBytes), Color: diskBytesColor(float64(wrBytes) / 1024)},
+		{Text: fmt.Sprintf(" %5.1f%6.1f", rdIosS, wrIosS), Raw: rdIosS, Color: metric.White},
+		{Text: fmt.Sprintf(" %6.1f", rkibs), Raw: rdBytesS, Color: diskBytesColor(rkibs)},
+		{Text: fmt.Sprintf(" %6.1f", wkibs), Raw: wrBytesS, Color: diskBytesColor(wkibs)},
 		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // avgqu-sz
 		{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}, // avgrq-sz
 		{Text: fmt.Sprintf(" %5.1f", 0.0), Raw: 0, Color: metric.White}, // %iow

@@ -41,8 +41,11 @@ type diskStat struct {
 // jiffies diffs used by deltams (may be nil only if neither -c nor -d is set,
 // which never happens when a Disk exists). full enables extended columns.
 // unit is retained in the signature for API compatibility but unused by the
-// disk renderer (rkB/s is always KiB/s — D5 removed the dead field).
-func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, _ metric.UnitMode) *Disk {
+// disk renderer (rkB/s is always KiB/s — D5 removed the dead field). interval
+// is likewise unused on Linux: deltams (CPU jiffies) is the time base; the
+// parameter exists for the shared darwin/Linux constructor signature (darwin
+// has no jiffies equivalent and rates over wall-clock time).
+func NewDisk(cpu *CPU, devices []string, ncpu int, full bool, _ metric.UnitMode, _ int) *Disk {
 	return &Disk{cpu: cpu, devices: devices, ncpu: ncpu, full: full,
 		prev: make(map[string]diskStat, len(devices))}
 }
