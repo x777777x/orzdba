@@ -89,15 +89,84 @@ Linux 磁盘设备名为 `/dev/` 下的块设备（如 `sda`、`vda`、`nvme0n1`
 
 macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看），网卡名为 `en0`/`en1` 等。
 
-### 连接 MySQL
+### 连接 MySQL：认证方式
 
-默认连接本机 `127.0.0.1:3306`。远程或指定账号：
+默认连接本机 `127.0.0.1:3306`。凭证按**字段级**优先级合并（低优先级来源的字段会被高优先级覆盖）：
 
-```bash
-./bin/orzdba -H 192.168.1.10 -P 3306 --mysql-user root --mysql-pass 'xxx' -mysql -i 1 -C 5
+| 优先级 | 来源 | 说明 |
+|--------|------|------|
+| 高 | CLI：`--mysql-user`、`-H`、`-P`、`-S`、`--mysql-defaults-file` | 显式参数；**密码不通过命令行传入** |
+| ↑ | 环境变量 `ORZDBA_MYSQL_USER` / `ORZDBA_MYSQL_PASS` | 适合 systemd `EnvironmentFile`/容器注入；`/proc/<pid>/environ` 仅同用户可读 |
+| | `/etc/orzdba.cnf` | **推荐**。orzdba 专属凭证文件，启动强制 0600 + 属主校验 |
+| | `/etc/my.cnf`、`/etc/mysql/my.cnf`、`~/.my.cnf` | 兼容读取，保持只告警不拒绝 |
+| 低 | 编译期注入（`-ldflags -X` 设置 `mysqlc` 注入字段） | 默认空 |
+
+**CLI 没有密码参数**——命令行密码会被同机任意用户通过 `ps(1)`/`/proc/<pid>/cmdline` 看到，已在安全加固中移除。
+
+#### 推荐的认证方式
+
+**方式一：最小权限账号 + `/etc/orzdba.cnf`（本机/远程均适用，推荐）**
+
+MySQL 侧建监控专用账号，只授 orzdba 需要的两项权限（`PROCESS` 用于 `SHOW ENGINE INNODB STATUS`，`REPLICATION CLIENT` 用于 `SHOW SLAVE STATUS`；**不给业务库任何 SELECT**——密码即使泄露也读不到业务数据）：
+
+```sql
+CREATE USER 'orzdba'@'localhost' IDENTIFIED BY '强密码';
+GRANT PROCESS, REPLICATION CLIENT ON *.* TO 'orzdba'@'localhost';
 ```
 
-凭证解析优先级：**命令行 > 环境变量（`ORZDBA_MYSQL_USER`/`ORZDBA_MYSQL_PASS`）> my.cnf（`~/.my.cnf` 等）**。推荐用环境变量或 my.cnf 传凭证；`--mysql-pass` 会把密码暴露在命令行（`ps`/`/proc/<pid>/cmdline` 同机用户可见），仅限调试。
+```ini
+# /etc/orzdba.cnf（必须 0600）
+[client]
+user = orzdba
+password = 强密码
+host = 127.0.0.1
+port = 3306
+```
+
+```bash
+./bin/orzdba -mysql -i 1 -C 5
+```
+
+**方式二：Unix socket（仅本机，密码可不落盘）**
+
+```ini
+# /etc/orzdba.cnf
+[client]
+user = orzdba
+socket = /var/run/mysqld/mysqld.sock
+```
+
+```bash
+./bin/orzdba -mysql -i 1
+```
+
+`socket` 存在时优先于 `host:port`。
+
+**方式三：环境变量（适合 systemd/容器注入）**
+
+```bash
+ORZDBA_MYSQL_USER=orzdba ORZDBA_MYSQL_PASS='xxx' ./bin/orzdba -mysql -i 1
+```
+
+**方式四：共享 my.cnf（兼容旧用法）**
+
+凭证写在任一搜索路径的 `[client]` 段即可；或zdba 对共享 my.cnf 只告警不拒绝，注意这些文件可能被 mysql 客户端等其他程序读取，权限请自行约束。
+
+#### orzdba.cnf 的作用
+
+- **orzdba 专属凭证文件**：与 mysql 客户端、备份脚本等使用的 `my.cnf` 隔离，`[client]` 段不会被其他程序读到，也不会互相覆盖。
+- **强制最小权限（fail-closed）**：启动时校验文件必须 **0600 且属主为运行用户或 root**，否则**拒绝启动**并打印修复命令（`chmod 600` / `chown`）。手工 `chmod 644` 这类误配会直接失败，而不是带病运行。
+- **优先命中**：位于凭证搜索路径首位，字段会覆盖共享 my.cnf 的同名字段。
+- **可指定任意路径**：`--mysql-defaults-file /path` 指向的文件同样走严格校验。
+- **独立于部署**：Ansible 渲染（`deploy/ansible/`）自动落 0600 + 正确属主，并可顺带创建最小权限账号，见 [`deploy/ansible/README.md`](deploy/ansible/README.md)。
+
+#### 远程与 TLS
+
+```bash
+./bin/orzdba -mysql -H 192.168.1.10 -P 3306 --mysql-tls -i 1
+```
+
+`--mysql-tls` 启用完整证书校验（默认 CA 校验、按主机名验证 `ServerName`）；自签证书需配私有 CA，暂未提供 CA 参数。注意：**远程 `-H` 与本地系统指标参数互斥**（见下文运维参数）。
 
 ### MySQL 连接参数
 
@@ -106,8 +175,8 @@ macOS 磁盘设备名为 `disk0`/`disk1` 等（可用 `ls /dev/disk*` 查看）�
 | `-H, --host` | MySQL 主机（默认 127.0.0.1） |
 | `-P, --port` | 端口（默认 3306） |
 | `-S, --socket` | 使用 Unix socket 连接 |
-| `--mysql-user` / `--mysql-pass` | 用户名 / 密码 |
-| `--mysql-defaults-file` | 指定 my.cnf 文件 |
+| `--mysql-user` | 用户名 |
+| `--mysql-defaults-file` | 指定凭证文件（严格校验 0600+属主） |
 | `--mysql-timeout` | SQL/连接超时（默认 1s） |
 | `--mysql-tls` | 启用 TLS |
 
