@@ -266,6 +266,27 @@ func TestMemMissingDegrade(t *testing.T) {
 	}
 }
 
+func TestMemCollectFullDegrade(t *testing.T) {
+	// --full with a failed data source must keep the 7-cell/7-token shape of
+	// a normal full row (same class as the disk zero-row fix). A degraded row
+	// that collapses to one cell would misalign every later column in default
+	// mode and change the --sep column count.
+	c := NewMem(true, metric.UnitRaw)
+	cells := c.consume(nil)
+	if len(cells) != 7 {
+		t.Fatalf("full degrade row = %d cells, want 7", len(cells))
+	}
+	for i, cell := range cells {
+		fields := strings.Fields(cell.Text)
+		if len(fields) != 1 {
+			t.Fatalf("full degrade cell %d = %q, want exactly 1 token", i, cell.Text)
+		}
+		if fields[0] != "0" && fields[0] != "0.0" {
+			t.Errorf("full degrade cell %d field = %q, want zero", i, fields[0])
+		}
+	}
+}
+
 // ---- multi-disk ----
 
 func TestParseDiskStatsMulti(t *testing.T) {

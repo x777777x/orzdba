@@ -114,7 +114,8 @@ func (m memInfo) usage() float64 {
 func (m *Mem) Collect() []metric.Cell {
 	info := collectMemInfo()
 	if !info.ok || info.total == 0 {
-		return []metric.Cell{{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}}
+		// Same shape-consistency rule as the Linux Mem (see memZeros).
+		return memZeros(m.full, m.unit)
 	}
 	usage := info.usage()
 

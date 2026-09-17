@@ -108,7 +108,10 @@ func (m *Mem) Collect() []metric.Cell {
 func (m *Mem) consume(data []byte) []metric.Cell {
 	info := parseMemInfo(data)
 	if !info.ok || info.total == 0 {
-		return []metric.Cell{{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}}
+		// Degrade with the normal row's shape (1 cell, or 7 in --full): a
+		// single usage cell would misalign later columns in default mode and
+		// change the --sep column count (see memZeros).
+		return memZeros(m.full, m.unit)
 	}
 	usage := info.usage()
 	// bytes = kB * 1024. used = total - available: the same definition usage%

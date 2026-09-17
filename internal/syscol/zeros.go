@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"orzdba/internal/metric"
+	"orzdba/internal/render"
 )
 
 // Platform-shared zero-value row builders. Like the color thresholds in
@@ -51,4 +52,22 @@ func (d *Disk) zeroRow() []metric.Cell {
 		}
 	}
 	return cells
+}
+
+// memZeros returns a zero-valued row matching mem's current cell layout (1
+// cell, or 7 cells in --full). A data-source failure must not collapse the
+// row to a single cell: that would misalign every later column in the default
+// mode and change the --sep column count — the same shape-consistency rule
+// the disk zero row follows. unit drives the byte-column presentation so the
+// zero row matches a normal row's format.
+func memZeros(full bool, unit metric.UnitMode) []metric.Cell {
+	if !full {
+		return []metric.Cell{{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}}
+	}
+	z := make([]metric.Cell, 7)
+	z[0] = metric.Cell{Text: fmt.Sprintf(" %6.1f", 0.0), Raw: 0, Color: metric.White}
+	for i := 1; i < 7; i++ {
+		z[i] = metric.Cell{Text: " " + render.FormatBytesValue(0, unit, 8, 8), Raw: 0, Color: metric.White}
+	}
+	return z
 }
